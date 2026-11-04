@@ -1,0 +1,5 @@
+mediapipe==1.2.2
+# MediaPipe depends on this OpenCV distribution. It includes cv2 and the GUI.
+# Do not also install opencv-python or a headless OpenCV distribution.
+opencv-contrib-python==5.0.0.93
+numpy==2.5.4
