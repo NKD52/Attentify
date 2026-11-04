@@ -1,0 +1,28 @@
+# Local environments and Python caches
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Videos, images, private datasets, and generated results stay local
+*.mp4
+*.avi
+*.mov
+*.mkv
+*.webm
+*.m4v
+*.wmv
+*.jpg
+*.jpeg
+*.png
+*.csv
+*.parquet
+data/
+videos/
+outputs/
+
+# Downloaded model assets
+*.task
+*.download
+.env

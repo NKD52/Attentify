@@ -4,12 +4,16 @@ Final Year Project (FYP) repository for student attention detection research.
 
 ## Structure
 
-- `computer-vision/face-tracking-prototype/`: reserved for the future face-tracking prototype.
+- [`computer-vision/face-tracking-prototype/`](computer-vision/face-tracking-prototype/): Prototype 1, local multi-face detection and temporary tracking.
 - `experiments/random-forest/`: reserved for Random Forest experiments.
 
 ## Status
 
-Initial repository structure only. The prototype has not been built.
+Prototype 1 implements local video input, MediaPipe Face Landmarker, temporary
+geometric tracking IDs, face counts, processing FPS, and annotated MP4 output.
+See its README for installation, usage, classroom testing, and limitations.
+It does not implement recognition, permanent student identity, attention
+classification, cross-class histories, or a dashboard.
 
 ## Data privacy
 
