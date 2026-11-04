@@ -196,11 +196,17 @@ controlled repeated-portrait test verifies plumbing and multi-face configuration
 not performance on five different students.
 
 git clone https://github.com/NKD52/Attentify.git
+
 cd Attentify\computer-vision\face-tracking-prototype
+
 py -3.13 -m venv .venv
+
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
+
 .\.venv\Scripts\python.exe main.py --download-model
-.\.venv\Scripts\python.exe main.py --video "D:\Videos\classroom.mp4" --output "outputs\test.mp4" --display
+
+.\.venv\Scripts\python.exe main.py --video "D:\Videos\classroom.mp4" --output 
+"outputs\test.mp4" --display
 
 ## References
 
