@@ -157,6 +157,80 @@ output to GitHub. Annotated videos still contain students' faces.
 
 ## Troubleshooting
 
+### Classroom video returns zero faces
+
+The full-frame model can miss faces that occupy only a small part of a wide
+scene, even when they look clear to a person. Increasing the source resolution
+alone does not increase face size relative to the detector's internal input.
+The default path remains unchanged: VIDEO mode, RGB input, confidence 0.5,
+and no tiled inference.
+
+For a wide classroom view, enable the same model on overlapping crops:
+
+```powershell
+.\.venv\Scripts\python.exe main.py --video "D:\Videos\classroom.mp4" --output "outputs\classroom-tiled.mp4" --tile-grid 4 --diagnostics
+```
+
+`--tile-grid 4` adds sixteen overlapping IMAGE-mode crops for each sampled
+frame. Boxes are mapped back into frame coordinates, duplicates are suppressed
+by overlap, and results are limited to `--max-faces`. Crops use stateless IMAGE
+mode rather than reusing VIDEO state between unrelated regions. Full-frame
+inference still uses VIDEO mode with strictly increasing source timestamps.
+This is slower; `--sample-every 5` can help with an initial comparison, but
+reduces tracking continuity. A 3x3 grid is cheaper and may miss more small faces.
+Tile seams, occlusion, and the simple duplicate suppression can still cause
+misses, duplicate boxes, or unstable IDs. Tiling is optional, not a guaranteed
+classroom detection solution.
+
+Inspect one decoded frame without writing images or an output video:
+
+```powershell
+.\.venv\Scripts\python.exe main.py --video "D:\Videos\classroom.mp4" --inspect-frame 0
+.\.venv\Scripts\python.exe main.py --video "D:\Videos\classroom.mp4" --inspect-frame 0 --tile-grid 4
+```
+
+The index is zero-based. Inspection decodes sequentially and compares native
+and configured resized pixels in fresh IMAGE and VIDEO instances. This isolates
+resizing and temporal state without reusing detections from previous frames.
+Use an index where faces are visible; it need not be frame 0.
+
+`--diagnostics` prints package versions, capture backend, effective FPS,
+orientation metadata/auto-rotation setting, model filename, all three confidence
+thresholds, maximum faces, resize limit, sampling interval, and tile grid. Each
+sampled frame reports its index, increasing timestamp, decoded/inference size,
+pixel type, BGR-to-RGB conversion, full-frame/tile/merged counts, and visible
+tracks. A final summary reports zero-detection frames. Logs contain no images.
+Run the same frame with `--confidence 0.3` to test thresholds; lower values may
+increase false positives and are not the default fix. `--max-width 0` disables
+resizing for a controlled comparison.
+
+An upright decoded frame and `orientation_meta=0` rule out a rotation issue for
+that clip. If another clip's decoded image is sideways, inspect its rotation
+metadata and codec/backend behavior rather than swapping RGB/BGR channels.
+Inference now explicitly rejects anything other than uint8 three-channel BGR
+input, and makes cropped RGB arrays contiguous before passing them to MediaPipe.
+
+Local investigation of one failing 3840x2160, 25 FPS classroom clip found:
+
+- Frames 0, 50, and 125 returned zero full-frame faces in fresh IMAGE mode
+  at both native and 1280 width, at confidence 0.5 and 0.3.
+- The decoded orientation was upright with zero rotation metadata. Pixel format
+  was uint8 BGR; the existing RGB conversion and VIDEO timestamps were correct.
+- A close crop of frame 0 detected two faces at 0.5. The 4x4 tiled pass recovered
+  four boxes on that frame at native and 1280 width, in IMAGE and VIDEO comparisons.
+
+This supports relative face scale as the cause for that clip; it does not
+establish the cause for every video. No classroom images or video are committed.
+
+Across the whole clip, sampling every fifth frame produced 52 output frames.
+The baseline had 52 zero-face frames; 4x4 tiling had none. Both outputs decoded
+at the expected 5 FPS. Runtime was approximately 12 seconds for the baseline
+and 24 seconds with tiling on the test machine. These are detection-count
+checks, not a measured precision/recall evaluation. All nine unit tests passed,
+including RGB conversion, timestamp handling, separate IMAGE-mode tile calls,
+pixel validation, resize behavior, and duplicate suppression. The earlier
+controlled five-face integration checks also passed again with tiling disabled.
+
 - **Model not found:** run the download command, or pass `--model` with its path.
 - **Cannot open input:** check the full filename, permission, and video codec.
 - **No faces:** try closer/larger faces, better lighting, and less profile rotation.

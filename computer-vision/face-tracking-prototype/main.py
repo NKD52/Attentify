@@ -8,6 +8,7 @@ import sys
 from time import perf_counter
 
 import cv2
+import mediapipe as mp
 
 from face_detector import DEFAULT_MODEL, FaceDetector, download_model
 from tracker import FaceTracker
@@ -23,8 +24,13 @@ def parse_args():
     parser.add_argument("--download-model", action="store_true", help="Download model and exit")
     parser.add_argument("--max-faces", type=int, default=5)
     parser.add_argument("--sample-every", type=int, default=1, help="Process every Nth frame")
-    parser.add_argument("--max-width", type=int, default=1280, help="Resize down to this width")
+    parser.add_argument("--max-width", type=int, default=1280, help="Resize down to this width; 0 keeps native size")
     parser.add_argument("--confidence", type=float, default=0.5)
+    parser.add_argument("--tile-grid", type=int, choices=(1, 2, 3, 4), default=1,
+                        help="Optional overlapping NxN IMAGE crops; 1 disables tiling")
+    parser.add_argument("--diagnostics", action="store_true", help="Print config and counts for every sampled frame")
+    parser.add_argument("--inspect-frame", type=int, metavar="INDEX",
+                        help="Compare one zero-based video frame in fresh IMAGE/VIDEO modes, then exit")
     parser.add_argument("--max-lost-seconds", type=float, default=1.0)
     parser.add_argument("--match-distance", type=float, default=1.0,
                         help="Maximum match distance in face-box diagonals")
@@ -33,8 +39,10 @@ def parse_args():
     args = parser.parse_args()
     if not args.download_model and args.video is None and args.camera is None:
         parser.error("provide --video PATH or --camera INDEX")
-    if min(args.max_faces, args.sample_every) < 1 or args.max_width < 320:
-        parser.error("max-faces/sample-every must be positive; max-width must be >= 320")
+    if min(args.max_faces, args.sample_every) < 1 or (args.max_width != 0 and args.max_width < 320):
+        parser.error("max-faces/sample-every must be positive; max-width must be 0 or >= 320")
+    if args.inspect_frame is not None and (args.video is None or args.inspect_frame < 0):
+        parser.error("inspect-frame requires --video and a nonnegative frame index")
     if not math.isfinite(args.confidence) or not 0 <= args.confidence <= 1:
         parser.error("confidence must be between 0 and 1")
     if not math.isfinite(args.max_lost_seconds) or args.max_lost_seconds < 0:
@@ -46,6 +54,40 @@ def parse_args():
     if args.camera is not None and args.camera < 0:
         parser.error("camera index must be >= 0")
     return args
+
+
+def prepare_frame(frame, max_width):
+    height, width = frame.shape[:2]
+    if max_width and width > max_width:
+        return cv2.resize(frame, (max_width, max(1, round(height * max_width / width))),
+                          interpolation=cv2.INTER_AREA)
+    return frame
+
+
+def inspect_frame(args):
+    """Compare decoded pixels directly; do not save student images or video."""
+    capture = cv2.VideoCapture(str(args.video))
+    try:
+        if not capture.isOpened():
+            raise RuntimeError("Cannot open video for frame inspection")
+        # Sequential decoding avoids approximate keyframe seeks selecting a different frame.
+        for _ in range(args.inspect_frame + 1):
+            ok, frame = capture.read()
+            if not ok:
+                raise ValueError("inspect-frame is beyond readable video frames")
+        print(f"[inspect] frame={args.inspect_frame} orientation_meta={capture.get(cv2.CAP_PROP_ORIENTATION_META)} "
+              f"orientation_auto={capture.get(cv2.CAP_PROP_ORIENTATION_AUTO)} "
+              f"opencv={cv2.__version__} mediapipe={mp.__version__}")
+        for label, pixels in (("native", frame), ("processed", prepare_frame(frame, args.max_width))):
+            for mode in ("IMAGE", "VIDEO"):
+                with FaceDetector(args.model, args.max_faces, args.confidence, args.tile_grid, mode) as detector:
+                    boxes = detector.detect(pixels, 0)
+                    print(f"[inspect] size={label}:{pixels.shape[1]}x{pixels.shape[0]} "
+                          f"dtype={pixels.dtype} input=BGR inference=RGB mode={mode} timestamp_ms=0 "
+                          f"confidence={args.confidence} max_faces={args.max_faces} tile_grid={args.tile_grid} "
+                          f"counts={detector.last_counts} boxes={boxes}", flush=True)
+    finally:
+        capture.release()
 
 
 def annotate(frame, tracks, fps):
@@ -71,6 +113,9 @@ def run(args):
         return
     if args.video is not None and not args.video.is_file():
         raise FileNotFoundError(f"Input video not found: {args.video}")
+    if args.inspect_frame is not None:
+        inspect_frame(args)
+        return
     if args.output.suffix.lower() != ".mp4":
         raise ValueError("Use an .mp4 output path")
     if args.video is not None and args.output.resolve() == args.video.resolve():
@@ -95,7 +140,15 @@ def run(args):
             source_fps = 30.0
             print("Camera FPS unavailable; output uses nominal 30 FPS.")
         tracker = FaceTracker(args.max_lost_seconds, args.match_distance)
-        with FaceDetector(args.model, args.max_faces, args.confidence) as detector:
+        if args.diagnostics:
+            print(f"[config] opencv={cv2.__version__} mediapipe={mp.__version__} backend={capture.getBackendName()} "
+                  f"mode=VIDEO tile_mode=IMAGE model={args.model.name} max_faces={args.max_faces} "
+                  f"detection/presence/tracking_confidence={args.confidence} max_width={args.max_width} "
+                  f"sample_every={args.sample_every} source_fps={source_fps} "
+                  f"orientation_meta={capture.get(cv2.CAP_PROP_ORIENTATION_META)} "
+                  f"orientation_auto={capture.get(cv2.CAP_PROP_ORIENTATION_AUTO)} tile_grid={args.tile_grid}", flush=True)
+        zero_frames = 0
+        with FaceDetector(args.model, args.max_faces, args.confidence, args.tile_grid) as detector:
             while True:
                 ok, frame = capture.read()
                 if not ok:
@@ -109,15 +162,20 @@ def run(args):
                 if frame_index % args.sample_every:
                     continue
                 tick = perf_counter()
-                height, width = frame.shape[:2]
-                if width > args.max_width:
-                    frame = cv2.resize(frame, (args.max_width, max(1, round(height * args.max_width / width))))
+                source_height, source_width = frame.shape[:2]
+                frame = prepare_frame(frame, args.max_width)
                 height, width = frame.shape[:2]
                 seconds = frame_index / source_fps if args.video is not None else tick - start
                 timestamp_ms = max(last_ms + 1, round(seconds * 1000))
                 last_ms = timestamp_ms
                 boxes = detector.detect(frame, timestamp_ms)
+                zero_frames += not boxes
                 tracks = tracker.update(boxes, seconds)
+                if args.diagnostics:
+                    print(f"[frame] index={frame_index} timestamp_ms={timestamp_ms} "
+                          f"decoded={source_width}x{source_height} inference={width}x{height} "
+                          f"dtype={frame.dtype} input=BGR inference_color=RGB "
+                          f"counts={detector.last_counts} visible_tracks={len(tracks)}", flush=True)
                 durations.append(perf_counter() - tick)
                 processing_fps = len(durations) / max(sum(durations), 1e-9)
                 annotate(frame, tracks, processing_fps)
@@ -146,6 +204,8 @@ def run(args):
             print(f"Saved {processed} annotated frames to {args.output.resolve()}")
     if processed:
         print(f"Total elapsed: {perf_counter() - start:.2f}s; IDs are temporary within this run.")
+        if args.diagnostics:
+            print(f"[summary] processed={processed} zero_face_frames={zero_frames}")
 
 
 if __name__ == "__main__":
