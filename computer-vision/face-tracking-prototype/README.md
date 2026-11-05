@@ -152,6 +152,45 @@ frames. The final console summary now also reports **overall throughput**
 and the same clip; the larger detector number is not overall application FPS.
 With `--diagnostics`, `scan` and `passes` show the work done on each frame.
 
+### Separate search and regular-frame timings
+
+For a quieter performance comparison, use `--timings` instead of per-frame logs:
+
+```powershell
+.\.venv\Scripts\python.exe main.py --video "D:\Videos\classroom.mp4" --tile-grid 4 --adaptive --no-output --display --timings
+```
+
+Stop with Q, Esc, or Ctrl+C, or let the clip end. The final `[timing]` lines show:
+
+- `phase=search`: detector time for the complete discovery call, including any
+  known-face region checks performed on that search frame.
+- `phase=regular`: detector time for face-region checks between searches.
+- `frames`, `detector_total_ms`, `detector_avg_ms`, `detector_min_ms`, and
+  `detector_max_ms` for each observed phase. `detector_share_pct` shows how much
+  of total detection time that group consumed, not its share of all runtime.
+- `phase=fixed` when adaptive mode is off; these frames are never mislabeled as
+  adaptive regular frames. Groups with no observations are omitted.
+- Stage totals/averages/maxima for `read`, `resize`, `tracking`, and `draw`.
+  `write` and `display` appear only when enabled. `display` includes both
+  `imshow` and the keyboard/event wait. `write` includes first-writer setup.
+- `startup_ms` covers setup and model initialization after the capture is opened;
+  it is excluded from the search/regular detector groups. It does not include
+  Python import time or initial VideoCapture opening.
+
+`--diagnostics` includes these same summaries and adds `phase`, `detector_ms`,
+`read_ms`, `resize_ms`, `tracking_ms`, `draw_ms`, `write_ms`, and `display_ms` to
+each processed frame line. Its console print/flush cost is separately aggregated
+as `stage=logging`. `--timings` does not enable per-frame logging, so it helps
+check whether terminal output itself affects performance.
+
+All values measure elapsed wall time on the current machine, including thread
+scheduling delays. Stage sums need not equal the overall elapsed time: cleanup,
+other Python overhead, and final EOF reads are not separately categorized.
+Read statistics count all successfully decoded frames (including skipped frames);
+other per-frame stages count processed frames. No output writing or display time
+is attributed to MediaPipe's detector time. Detection settings, crop scheduling,
+thresholds, and frame sampling are unchanged by these diagnostics.
+
 For more than five visible faces, increase `--max-faces`, for example 10. This
 raises the global detection limit and the number of regions to check, so it can
 reduce FPS. Camera placement, occlusion, blur, and actual face size still limit

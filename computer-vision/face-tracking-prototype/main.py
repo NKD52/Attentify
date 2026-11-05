@@ -2,6 +2,7 @@
 
 import argparse
 from collections import deque
+from dataclasses import dataclass
 import math
 from pathlib import Path
 import sys
@@ -12,6 +13,39 @@ import mediapipe as mp
 
 from face_detector import DEFAULT_MODEL, FaceDetector, download_model
 from tracker import FaceTracker
+
+
+@dataclass
+class TimingStats:
+    """Constant-memory wall-clock totals; no frame/image data is retained."""
+
+    count: int = 0
+    total: float = 0.0
+    minimum: float = math.inf
+    maximum: float = 0.0
+
+    def add(self, seconds):
+        self.count += 1
+        self.total += seconds
+        self.minimum = min(self.minimum, seconds)
+        self.maximum = max(self.maximum, seconds)
+
+    @property
+    def average_ms(self):
+        return self.total * 1000 / self.count if self.count else 0.0
+
+
+def print_timings(phases, stages, startup_seconds, detection_seconds):
+    print(f"[timing] startup_ms={startup_seconds * 1000:.2f}")
+    for phase, stats in phases.items():
+        share = 100 * stats.total / detection_seconds if detection_seconds else 0.0
+        print(f"[timing] phase={phase} frames={stats.count} "
+              f"detector_total_ms={stats.total * 1000:.2f} detector_avg_ms={stats.average_ms:.2f} "
+              f"detector_min_ms={stats.minimum * 1000:.2f} detector_max_ms={stats.maximum * 1000:.2f} "
+              f"detector_share_pct={share:.1f}")
+    for stage, stats in stages.items():
+        print(f"[timing] stage={stage} calls={stats.count} total_ms={stats.total * 1000:.2f} "
+              f"avg_ms={stats.average_ms:.2f} max_ms={stats.maximum * 1000:.2f}")
 
 
 def parse_args(argv=None):
@@ -36,6 +70,7 @@ def parse_args(argv=None):
     parser.add_argument("--scan-every", type=int, default=20,
                         help="Adaptive discovery interval in processed frames (default 20)")
     parser.add_argument("--diagnostics", action="store_true", help="Print config and counts for every sampled frame")
+    parser.add_argument("--timings", action="store_true", help="Print timing summary without per-frame diagnostic logging")
     parser.add_argument("--inspect-frame", type=int, metavar="INDEX",
                         help="Compare one zero-based video frame in fresh IMAGE/VIDEO modes, then exit")
     parser.add_argument("--max-lost-seconds", type=float, default=1.0)
@@ -149,6 +184,15 @@ def run(args):
     durations = deque(maxlen=30)
     detection_seconds = 0.0
     total_faces = 0
+    phase_timings = {}
+    stage_timings = {}
+    startup_seconds = 0.0
+    timing_enabled = args.timings or args.diagnostics
+
+    def record_stage(name, seconds):
+        if timing_enabled:
+            stage_timings.setdefault(name, TimingStats()).add(seconds)
+
     start = perf_counter()
     try:
         if not capture.isOpened():
@@ -171,14 +215,18 @@ def run(args):
         zero_frames = 0
         with FaceDetector(args.model, args.max_faces, args.confidence, args.tile_grid,
                           adaptive=args.adaptive, scan_every=args.scan_every) as detector:
+            startup_seconds = perf_counter() - start
             while True:
+                read_start = perf_counter()
                 ok, frame = capture.read()
+                read_seconds = perf_counter() - read_start
                 if not ok:
                     if processed == 0:
                         raise RuntimeError("Input opened but no frames could be decoded")
                     if args.camera is not None:
                         print("Camera stopped delivering frames; closing output.")
                     break
+                record_stage("read", read_seconds)
                 frame_index = index
                 index += 1
                 if frame_index % args.sample_every:
@@ -186,24 +234,33 @@ def run(args):
                 tick = perf_counter()
                 source_height, source_width = frame.shape[:2]
                 frame = prepare_frame(frame, args.max_width)
+                resize_seconds = perf_counter() - tick
+                record_stage("resize", resize_seconds)
                 height, width = frame.shape[:2]
                 seconds = frame_index / source_fps if args.video is not None else tick - start
                 timestamp_ms = max(last_ms + 1, round(seconds * 1000))
                 last_ms = timestamp_ms
                 detection_start = perf_counter()
                 boxes = detector.detect(frame, timestamp_ms)
-                detection_seconds += perf_counter() - detection_start
+                detector_seconds = perf_counter() - detection_start
+                detection_seconds += detector_seconds
+                phase = ("search" if detector.last_counts.get("scan", False) else "regular") if args.adaptive else "fixed"
+                if timing_enabled:
+                    phase_timings.setdefault(phase, TimingStats()).add(detector_seconds)
                 total_faces += len(boxes)
                 zero_frames += not boxes
+                tracking_start = perf_counter()
                 tracks = tracker.update(boxes, seconds)
-                if args.diagnostics:
-                    print(f"[frame] index={frame_index} timestamp_ms={timestamp_ms} "
-                          f"decoded={source_width}x{source_height} inference={width}x{height} "
-                          f"dtype={frame.dtype} input=BGR inference_color=RGB "
-                          f"counts={detector.last_counts} visible_tracks={len(tracks)}", flush=True)
+                tracking_seconds = perf_counter() - tracking_start
+                record_stage("tracking", tracking_seconds)
                 durations.append(perf_counter() - tick)
                 processing_fps = len(durations) / max(sum(durations), 1e-9)
+                draw_start = perf_counter()
                 annotate(frame, tracks, processing_fps)
+                draw_seconds = perf_counter() - draw_start
+                record_stage("draw", draw_seconds)
+                write_seconds = 0.0
+                write_start = perf_counter()
                 if args.output is not None and writer is None:
                     args.output.parent.mkdir(parents=True, exist_ok=True)
                     writer = cv2.VideoWriter(str(args.output), cv2.VideoWriter_fourcc(*"mp4v"),
@@ -215,11 +272,33 @@ def run(args):
                     if (width, height) != output_size:
                         raise RuntimeError("Input resolution changed during capture")
                     writer.write(frame)
+                    write_seconds = perf_counter() - write_start
+                    record_stage("write", write_seconds)
                 processed += 1
+                display_seconds = 0.0
+                stop = False
                 if args.display:
+                    display_start = perf_counter()
                     cv2.imshow("Attentify - Prototype 1", frame)
-                    if cv2.waitKey(1) & 0xFF in (ord("q"), 27):
-                        break
+                    stop = cv2.waitKey(1) & 0xFF in (ord("q"), 27)
+                    display_seconds = perf_counter() - display_start
+                    record_stage("display", display_seconds)
+                if args.diagnostics:
+                    log_start = perf_counter()
+                    print(f"[frame] index={frame_index} timestamp_ms={timestamp_ms} "
+                          f"decoded={source_width}x{source_height} inference={width}x{height} "
+                          f"dtype={frame.dtype} input=BGR inference_color=RGB "
+                          f"counts={detector.last_counts} visible_tracks={len(tracks)} "
+                          f"phase={phase} detector_ms={detector_seconds * 1000:.2f} "
+                          f"read_ms={read_seconds * 1000:.2f} resize_ms={resize_seconds * 1000:.2f} "
+                          f"tracking_ms={tracking_seconds * 1000:.2f} draw_ms={draw_seconds * 1000:.2f} "
+                          f"write_ms={write_seconds * 1000:.2f} display_ms={display_seconds * 1000:.2f}", flush=True)
+                    record_stage("logging", perf_counter() - log_start)
+                if stop:
+                    break
+    except KeyboardInterrupt:
+        # Let a normal Ctrl+C stop reach the same timing summary as Q or EOF.
+        print("Stopped by user.")
     finally:
         capture.release()
         if writer is not None:
@@ -237,6 +316,8 @@ def run(args):
               "IDs are temporary within this run.")
         if args.diagnostics:
             print(f"[summary] processed={processed} zero_face_frames={zero_frames} mean_faces={total_faces / processed:.2f}")
+        if timing_enabled:
+            print_timings(phase_timings, stage_timings, startup_seconds, detection_seconds)
 
 
 if __name__ == "__main__":
