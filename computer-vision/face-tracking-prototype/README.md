@@ -80,7 +80,24 @@ The default maximum is five faces. To reduce processing work:
 
 Omit `--display` for file-only processing. With the preview focused, press Q
 or Esc to stop; Ctrl+C also stops and closes the video writer. An existing
-output is never overwritten. Choose another filename for each run.
+output is protected by default. Use `--overwrite` to reuse the same filename.
+
+For preview only, without writing any output video:
+
+```powershell
+.\.venv\Scripts\python.exe main.py --video "D:\Videos\classroom.mp4" --tile-grid 4 --no-output --display
+```
+
+To save repeatedly to the same output path:
+
+```powershell
+.\.venv\Scripts\python.exe main.py --video "D:\Videos\classroom.mp4" --tile-grid 4 --output "outputs\test.mp4" --overwrite --display
+```
+
+`--overwrite` replaces the previous output when writing begins; the input video
+cannot be used as the output, even with this flag. `--no-output` creates no
+video writer or output directory. Add `--diagnostics` if you want console counts
+without a preview. It cannot be combined with `--output` or `--overwrite`.
 
 ### Optional webcam
 
