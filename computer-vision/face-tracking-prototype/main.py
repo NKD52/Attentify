@@ -14,12 +14,15 @@ from face_detector import DEFAULT_MODEL, FaceDetector, download_model
 from tracker import FaceTracker
 
 
-def parse_args():
+def parse_args(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     source = parser.add_mutually_exclusive_group()
     source.add_argument("--video", type=Path, help="Local input video path")
     source.add_argument("--camera", type=int, help="Webcam index, e.g. 0")
-    parser.add_argument("--output", type=Path, default=Path("outputs/annotated.mp4"))
+    output = parser.add_mutually_exclusive_group()
+    output.add_argument("--output", type=Path, default=Path("outputs/annotated.mp4"))
+    output.add_argument("--no-output", action="store_true", help="Process without saving a video; use --display for preview")
+    parser.add_argument("--overwrite", action="store_true", help="Replace an existing output video")
     parser.add_argument("--model", type=Path, default=DEFAULT_MODEL)
     parser.add_argument("--download-model", action="store_true", help="Download model and exit")
     parser.add_argument("--max-faces", type=int, default=5)
@@ -36,7 +39,11 @@ def parse_args():
                         help="Maximum match distance in face-box diagonals")
     parser.add_argument("--fps", type=float, help="Override input FPS; required if metadata is invalid")
     parser.add_argument("--display", action="store_true", help="Show preview; Q or Esc stops")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
+    if args.no_output:
+        if args.overwrite:
+            parser.error("--overwrite cannot be combined with --no-output")
+        args.output = None
     if not args.download_model and args.video is None and args.camera is None:
         parser.error("provide --video PATH or --camera INDEX")
     if min(args.max_faces, args.sample_every) < 1 or (args.max_width != 0 and args.max_width < 320):
@@ -116,12 +123,16 @@ def run(args):
     if args.inspect_frame is not None:
         inspect_frame(args)
         return
-    if args.output.suffix.lower() != ".mp4":
-        raise ValueError("Use an .mp4 output path")
-    if args.video is not None and args.output.resolve() == args.video.resolve():
-        raise ValueError("Output must be different from input")
-    if args.output.exists():
-        raise FileExistsError(f"Output already exists; choose another path: {args.output}")
+    if args.output is not None:
+        if args.output.suffix.lower() != ".mp4":
+            raise ValueError("Use an .mp4 output path")
+        if args.video is not None and (
+            args.output.resolve() == args.video.resolve()
+            or (args.output.exists() and args.output.samefile(args.video))
+        ):
+            raise ValueError("Output must be different from input, even with --overwrite")
+        if args.output.exists() and not args.overwrite:
+            raise FileExistsError(f"Output already exists; use --overwrite to replace it: {args.output}")
     source = str(args.video) if args.video is not None else args.camera
     capture = cv2.VideoCapture(source)
     writer = None
@@ -179,16 +190,17 @@ def run(args):
                 durations.append(perf_counter() - tick)
                 processing_fps = len(durations) / max(sum(durations), 1e-9)
                 annotate(frame, tracks, processing_fps)
-                if writer is None:
+                if args.output is not None and writer is None:
                     args.output.parent.mkdir(parents=True, exist_ok=True)
                     writer = cv2.VideoWriter(str(args.output), cv2.VideoWriter_fourcc(*"mp4v"),
                                              source_fps / args.sample_every, (width, height))
                     if not writer.isOpened():
                         raise RuntimeError("Cannot create MP4 output. Check codec and destination permissions.")
                     output_size = (width, height)
-                if (width, height) != output_size:
-                    raise RuntimeError("Input resolution changed during capture")
-                writer.write(frame)
+                if writer is not None:
+                    if (width, height) != output_size:
+                        raise RuntimeError("Input resolution changed during capture")
+                    writer.write(frame)
                 processed += 1
                 if args.display:
                     cv2.imshow("Attentify - Prototype 1", frame)
@@ -200,8 +212,10 @@ def run(args):
             writer.release()
         if args.display:
             cv2.destroyAllWindows()
-        if processed:
+        if processed and writer is not None:
             print(f"Saved {processed} annotated frames to {args.output.resolve()}")
+        elif processed:
+            print(f"Processed {processed} frames; no output video saved.")
     if processed:
         print(f"Total elapsed: {perf_counter() - start:.2f}s; IDs are temporary within this run.")
         if args.diagnostics:
