@@ -112,6 +112,67 @@ than real time. It is a simple demo, not a real-time recording synchronizer.
 
 ## Main options
 
+### Faster classroom mode with small-face searches
+
+```powershell
+.\.venv\Scripts\python.exe main.py --video "D:\Videos\classroom.mp4" --tile-grid 4 --adaptive --no-output --display
+```
+
+`--adaptive` keeps MediaPipe Face Landmarker and the existing 0.5 confidence
+thresholds. Instead of rescanning sixteen tiles on every frame, it:
+
+1. Searches the full scene using the selected grid and the next finer grid
+   (4x4 and 5x5 with the command above). The alternate scale and crop boundaries
+   can expose small faces missed by one grid alone.
+2. Between searches, runs MediaPipe on compact regions around previously seen
+   faces. These regions are twice the face-box size and use a single-face
+   IMAGE task to avoid repeatedly predicting meshes for neighbours.
+3. Repeats the full search every 20 processed frames by default. Each returned
+   box still comes from a fresh inference; old positions are never counted as
+   current detections. Failed regions are retried twice, then discarded.
+
+The mode is opt-in: omit `--adaptive` to retain the existing fixed-grid path.
+It adds one model instance for single-face region checks, using more memory
+but fewer typical per-frame inference calls. It adds no dependencies or model
+downloads. Temporary IDs still come from the same geometric tracker.
+
+Use `--scan-every 10` for quicker discovery of new or returning faces at higher
+CPU cost; use 30 for less discovery overhead but a longer delay. The interval
+counts **processed frames**, so `--sample-every` also increases discovery latency
+in source time. At 25 FPS with every frame processed, 20 frames is about 0.8s.
+Fast motion, camera cuts, or a face leaving its search region can cause a miss
+until the next search. A frame-size change immediately resets regions and
+forces a fresh search. IMAGE-mode single-frame inspection always performs a
+full adaptive search, since it has no preceding video frames to reuse.
+
+The overlay still reports rolling processing FPS and can dip during search
+frames. The final console summary now also reports **overall throughput**
+(includes input decoding, startup, drawing, output, and preview waits) and
+**detector throughput** (time inside detection only). Compare matching settings
+and the same clip; the larger detector number is not overall application FPS.
+With `--diagnostics`, `scan` and `passes` show the work done on each frame.
+
+For more than five visible faces, increase `--max-faces`, for example 10. This
+raises the global detection limit and the number of regions to check, so it can
+reduce FPS. Camera placement, occlusion, blur, and actual face size still limit
+back-row detection; adaptive processing cannot reconstruct hidden faces.
+
+Local comparison on the same 256-frame 4K classroom clip, downscaled to 1280
+width with every frame processed, file-only input, no output recording, no
+preview, and diagnostics enabled:
+
+- Fixed 4x4: 46.42s total, 5.5 overall FPS, 6.8 detector FPS, 4.81 mean faces.
+- Adaptive 4x4 plus 5x5 discovery every 20 frames: 28.25s total, 9.1 overall FPS,
+  12.8 detector FPS, 4.98 mean faces.
+- Both processed all 256 frames without zero-face frames. The adaptive initial
+  search also found the rear face missed by fixed 4x4 on the first frame.
+
+These are one-machine timing and detection-count comparisons, not labelled
+precision/recall or a guaranteed FPS for other scenes. A higher face count alone
+is not proof of correct detection. Seventeen tests passed, including scan cadence,
+crop coordinate mapping, disappearance without stale boxes, and resolution resets.
+No classroom frames, videos, or per-student data are stored in this repository.
+
 - `--video PATH` or `--camera INDEX`: select exactly one input.
 - `--output PATH`: MP4 destination, default `outputs/annotated.mp4`.
 - `--max-faces 5`: maximum number MediaPipe should return, not a guaranteed count.
@@ -123,6 +184,8 @@ than real time. It is a simple demo, not a real-time recording synchronizer.
 - `--fps 25`: override source FPS when metadata is wrong or missing.
 - `--display`: show preview; default is file-only output.
 - `--model PATH` / `--download-model`: local model selection / one-time setup.
+- `--adaptive`: alternate periodic scene discovery with per-face region checks.
+- `--scan-every 20`: discovery interval in processed frames for adaptive mode.
 
 For constant-frame-rate files, sampled output uses source FPS divided by N,
 so playback duration is preserved to within a sampling interval. Only sampled

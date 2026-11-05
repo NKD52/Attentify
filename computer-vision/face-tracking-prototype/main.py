@@ -31,6 +31,10 @@ def parse_args(argv=None):
     parser.add_argument("--confidence", type=float, default=0.5)
     parser.add_argument("--tile-grid", type=int, choices=(1, 2, 3, 4), default=1,
                         help="Optional overlapping NxN IMAGE crops; 1 disables tiling")
+    parser.add_argument("--adaptive", action="store_true",
+                        help="Periodically search two grids and re-detect known face regions between scans")
+    parser.add_argument("--scan-every", type=int, default=20,
+                        help="Adaptive discovery interval in processed frames (default 20)")
     parser.add_argument("--diagnostics", action="store_true", help="Print config and counts for every sampled frame")
     parser.add_argument("--inspect-frame", type=int, metavar="INDEX",
                         help="Compare one zero-based video frame in fresh IMAGE/VIDEO modes, then exit")
@@ -50,6 +54,8 @@ def parse_args(argv=None):
         parser.error("max-faces/sample-every must be positive; max-width must be 0 or >= 320")
     if args.inspect_frame is not None and (args.video is None or args.inspect_frame < 0):
         parser.error("inspect-frame requires --video and a nonnegative frame index")
+    if args.scan_every < 1 or (args.adaptive and args.tile_grid < 2):
+        parser.error("scan-every must be >= 1; --adaptive requires --tile-grid 2, 3 or 4")
     if not math.isfinite(args.confidence) or not 0 <= args.confidence <= 1:
         parser.error("confidence must be between 0 and 1")
     if not math.isfinite(args.max_lost_seconds) or args.max_lost_seconds < 0:
@@ -87,11 +93,12 @@ def inspect_frame(args):
               f"opencv={cv2.__version__} mediapipe={mp.__version__}")
         for label, pixels in (("native", frame), ("processed", prepare_frame(frame, args.max_width))):
             for mode in ("IMAGE", "VIDEO"):
-                with FaceDetector(args.model, args.max_faces, args.confidence, args.tile_grid, mode) as detector:
+                with FaceDetector(args.model, args.max_faces, args.confidence, args.tile_grid, mode,
+                                  args.adaptive, args.scan_every) as detector:
                     boxes = detector.detect(pixels, 0)
                     print(f"[inspect] size={label}:{pixels.shape[1]}x{pixels.shape[0]} "
                           f"dtype={pixels.dtype} input=BGR inference=RGB mode={mode} timestamp_ms=0 "
-                          f"confidence={args.confidence} max_faces={args.max_faces} tile_grid={args.tile_grid} "
+                          f"confidence={args.confidence} max_faces={args.max_faces} tile_grid={args.tile_grid} adaptive={args.adaptive} "
                           f"counts={detector.last_counts} boxes={boxes}", flush=True)
     finally:
         capture.release()
@@ -140,6 +147,8 @@ def run(args):
     index = 0
     last_ms = -1
     durations = deque(maxlen=30)
+    detection_seconds = 0.0
+    total_faces = 0
     start = perf_counter()
     try:
         if not capture.isOpened():
@@ -157,9 +166,11 @@ def run(args):
                   f"detection/presence/tracking_confidence={args.confidence} max_width={args.max_width} "
                   f"sample_every={args.sample_every} source_fps={source_fps} "
                   f"orientation_meta={capture.get(cv2.CAP_PROP_ORIENTATION_META)} "
-                  f"orientation_auto={capture.get(cv2.CAP_PROP_ORIENTATION_AUTO)} tile_grid={args.tile_grid}", flush=True)
+                  f"orientation_auto={capture.get(cv2.CAP_PROP_ORIENTATION_AUTO)} tile_grid={args.tile_grid} "
+                  f"adaptive={args.adaptive} scan_every={args.scan_every}", flush=True)
         zero_frames = 0
-        with FaceDetector(args.model, args.max_faces, args.confidence, args.tile_grid) as detector:
+        with FaceDetector(args.model, args.max_faces, args.confidence, args.tile_grid,
+                          adaptive=args.adaptive, scan_every=args.scan_every) as detector:
             while True:
                 ok, frame = capture.read()
                 if not ok:
@@ -179,7 +190,10 @@ def run(args):
                 seconds = frame_index / source_fps if args.video is not None else tick - start
                 timestamp_ms = max(last_ms + 1, round(seconds * 1000))
                 last_ms = timestamp_ms
+                detection_start = perf_counter()
                 boxes = detector.detect(frame, timestamp_ms)
+                detection_seconds += perf_counter() - detection_start
+                total_faces += len(boxes)
                 zero_frames += not boxes
                 tracks = tracker.update(boxes, seconds)
                 if args.diagnostics:
@@ -217,9 +231,12 @@ def run(args):
         elif processed:
             print(f"Processed {processed} frames; no output video saved.")
     if processed:
-        print(f"Total elapsed: {perf_counter() - start:.2f}s; IDs are temporary within this run.")
+        elapsed = perf_counter() - start
+        print(f"Total elapsed: {elapsed:.2f}s; overall throughput: {processed / elapsed:.1f} FPS; "
+              f"detector throughput: {processed / max(detection_seconds, 1e-9):.1f} FPS; "
+              "IDs are temporary within this run.")
         if args.diagnostics:
-            print(f"[summary] processed={processed} zero_face_frames={zero_frames}")
+            print(f"[summary] processed={processed} zero_face_frames={zero_frames} mean_faces={total_faces / processed:.2f}")
 
 
 if __name__ == "__main__":

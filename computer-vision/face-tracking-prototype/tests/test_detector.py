@@ -71,6 +71,50 @@ class DetectorTests(unittest.TestCase):
         self.assertEqual(prepare_frame(frame, 1280).shape, (720, 1280, 3))
         self.assertIs(prepare_frame(frame, 3840), frame)
 
+    @patch.object(Path, "is_file", return_value=True)
+    def test_adaptive_rechecks_faces_and_does_not_display_lost_boxes(self, _):
+        full, tiles, roi = FakeLandmarker(), FakeLandmarker(), FakeLandmarker()
+        frame = np.zeros((100, 200, 3), dtype=np.uint8)
+        with patch.object(vision.FaceLandmarker, "create_from_options", side_effect=[full, tiles, roi]) as create:
+            with FaceDetector(Path("unused.task"), tile_grid=2, adaptive=True, scan_every=3) as detector:
+                # Controlled discovery. Later frames must use fresh crop results.
+                with patch.object(detector, "_boxes", return_value=[(20, 20, 40, 40)]), \
+                        patch.object(detector, "_crop_boxes", return_value=[]):
+                    detector.detect(frame, 0)
+                self.assertTrue(detector.last_counts["scan"])
+                self.assertEqual(detector.last_counts["passes"], 1 + 4 + 9)
+                for timestamp in (40, 80):
+                    self.assertEqual(detector.detect(frame, timestamp), [])
+                    self.assertFalse(detector.last_counts["scan"])
+                    self.assertEqual(detector.last_counts["passes"], 1)
+                self.assertEqual(full.timestamps, [0])
+                detector.detect(frame, 120)
+                self.assertTrue(detector.last_counts["scan"])
+                self.assertEqual(full.timestamps, [0, 120])
+                self.assertEqual(roi.timestamps, [])
+                self.assertEqual(create.call_args_list[2].args[0].num_faces, 1)
+
+    @patch.object(Path, "is_file", return_value=True)
+    def test_adaptive_resolution_change_forces_new_scan(self, _):
+        with patch.object(vision.FaceLandmarker, "create_from_options", side_effect=[FakeLandmarker() for _ in range(3)]):
+            with FaceDetector(Path("unused.task"), tile_grid=2, adaptive=True) as detector:
+                detector.detect(np.zeros((100, 200, 3), dtype=np.uint8), 0)
+                detector.detect(np.zeros((120, 200, 3), dtype=np.uint8), 40)
+                self.assertTrue(detector.last_counts["scan"])
+
+    @patch.object(Path, "is_file", return_value=True)
+    def test_crop_boxes_are_remapped_into_the_full_frame(self, _):
+        fake = FakeLandmarker()
+        with patch.object(vision.FaceLandmarker, "create_from_options", return_value=fake):
+            with FaceDetector(Path("unused.task"), running_mode="IMAGE") as detector:
+                with patch.object(detector, "_boxes", return_value=[(1, 2, 11, 12)]):
+                    result = detector._crop_boxes(np.zeros((100, 200, 3), dtype=np.uint8), (30, 40, 50, 50))
+                self.assertEqual(result, [(31, 42, 41, 52)])
+
+    def test_adaptive_requires_a_tile_grid(self):
+        with self.assertRaisesRegex(ValueError, "tile_grid"):
+            FaceDetector(Path("unused.task"), adaptive=True)
+
 
 if __name__ == "__main__":
     unittest.main()
