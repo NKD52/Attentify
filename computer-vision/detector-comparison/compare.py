@@ -2,6 +2,7 @@
 
 import argparse
 from contextlib import ExitStack
+from dataclasses import dataclass
 from math import isfinite
 from pathlib import Path
 import sys
@@ -31,6 +32,23 @@ MODES = {
 }
 
 
+@dataclass(frozen=True)
+class DetectorSettings:
+    mp_width: int = 640
+    mp_confidence: float = 0.5
+    mp_max_faces: int = 50
+    mp_tile_grid: int = 4
+    mp_adaptive: bool = True
+    mp_scan_every: int = 20
+    yunet_width: int = 640
+    yunet_confidence: float = 0.9
+    yunet_nms: float = 0.3
+    yunet_top_k: int = 5000
+
+
+DEFAULT_SETTINGS = DetectorSettings()
+
+
 def download(url, target, minimum_size=1):
     if target.is_file() and target.stat().st_size >= minimum_size:
         return target
@@ -48,7 +66,7 @@ def download(url, target, minimum_size=1):
     return target
 
 
-def build_processors(mode, stack):
+def build_processors(mode, stack, settings=DEFAULT_SETTINGS):
     import cv2
 
     processors = {}
@@ -62,7 +80,14 @@ def build_processors(mode, stack):
             print(f"Downloading {DEFAULT_MODEL.name} ...", flush=True)
             download_model(DEFAULT_MODEL)
         detector = stack.enter_context(
-            FaceDetector(DEFAULT_MODEL, max_faces=50, tile_grid=4, adaptive=True)
+            FaceDetector(
+                DEFAULT_MODEL,
+                max_faces=settings.mp_max_faces,
+                confidence=settings.mp_confidence,
+                tile_grid=settings.mp_tile_grid,
+                adaptive=settings.mp_adaptive,
+                scan_every=settings.mp_scan_every,
+            )
         )
         tracker = FaceTracker(1.0, 1.0)
 
@@ -90,7 +115,12 @@ def build_processors(mode, stack):
             sys.path.insert(0, str(source))
         from yunet import YuNet
 
-        detector_yunet = YuNet(str(model), confThreshold=0.9)
+        detector_yunet = YuNet(
+            str(model),
+            confThreshold=settings.yunet_confidence,
+            nmsThreshold=settings.yunet_nms,
+            topK=settings.yunet_top_k,
+        )
 
         def yunet(frame, seconds, timestamp_ms):
             height, width = frame.shape[:2]
@@ -112,7 +142,19 @@ def build_processors(mode, stack):
     return processors
 
 
-def run(mode, source, *, image=False, headless=False, limit=None):
+def resize_frame(frame, width, height=None):
+    import cv2
+
+    current_height, current_width = frame.shape[:2]
+    if height is None:
+        height = max(1, round(current_height * width / current_width))
+    if (width, height) == (current_width, current_height):
+        return frame
+    interpolation = cv2.INTER_AREA if width < current_width else cv2.INTER_LINEAR
+    return cv2.resize(frame, (width, height), interpolation=interpolation)
+
+
+def run(mode, source, *, image=False, headless=False, limit=None, settings=DEFAULT_SETTINGS):
     import cv2
 
     title = "Attentify detector comparison"
@@ -137,7 +179,8 @@ def run(mode, source, *, image=False, headless=False, limit=None):
             fps = capture.get(cv2.CAP_PROP_FPS)
             if not isfinite(fps) or fps <= 0:
                 fps = 30.0
-        processors = build_processors(mode, stack)
+        processors = build_processors(mode, stack, settings)
+        width_caps = {"MediaPipe": settings.mp_width, "YuNet": settings.yunet_width}
         if not headless:
             cv2.namedWindow(title, cv2.WINDOW_NORMAL)
             cv2.resizeWindow(title, 640 * len(processors), 480)
@@ -155,22 +198,27 @@ def run(mode, source, *, image=False, headless=False, limit=None):
             seconds = perf_counter() - start if camera else frames / fps
             timestamp = max(last_timestamp + 1, round(seconds * 1000))
             last_timestamp = timestamp
-            height, width = frame.shape[:2]
-            if width > 640:
-                frame = cv2.resize(
-                    frame, (640, max(1, round(height * 640 / width))),
-                    interpolation=cv2.INTER_AREA,
-                )
+            source_height, source_width = frame.shape[:2]
+            widths = {
+                name: min(width_caps[name] or source_width, source_width) for name in processors
+            }
+            resized_frames = {width: resize_frame(frame, width) for width in set(widths.values())}
             frames += 1
+            if frames == 1:
+                print("Input widths: " + ", ".join(f"{name} {width} px" for name, width in widths.items()))
             panels = []
             for name, process in processors.items():
-                panel = frame.copy()
+                width = widths[name]
+                panel = resized_frames[width].copy()
                 begin = perf_counter()
                 count = process(panel, seconds, timestamp)
                 durations[name] += perf_counter() - begin
                 counts[name] += count
                 if not headless:
-                    label = f"{name} | faces {count} | frame {frames}"
+                    label = f"{name} | {width} px | {count} faces | F{frames}"
+                    display_width = min(640, source_width)
+                    display_height = max(1, round(source_height * display_width / source_width))
+                    panel = resize_frame(panel, display_width, display_height)
                     panel = cv2.copyMakeBorder(
                         panel, 28, 0, 0, 0, cv2.BORDER_CONSTANT, value=(25, 25, 25)
                     )
@@ -198,7 +246,7 @@ def run(mode, source, *, image=False, headless=False, limit=None):
               "for detection, tracking if enabled, and box drawing")
 
 
-def open_launcher():
+def open_launcher(settings=DEFAULT_SETTINGS):
     import tkinter as tk
     from tkinter import filedialog, messagebox, ttk
 
@@ -237,7 +285,7 @@ def open_launcher():
             image = not use_camera and Path(source).suffix.lower() in IMAGE_EXTENSIONS
             root.withdraw()
             root.update()
-            run(choices[mode.get()], source, image=image)
+            run(choices[mode.get()], source, image=image, settings=settings)
         except Exception as error:
             root.deiconify()
             messagebox.showerror("Could not run preview", str(error), parent=root)
@@ -260,8 +308,33 @@ def open_launcher():
     root.mainloop()
 
 
+def probability(value):
+    number = float(value)
+    if not 0 <= number <= 1:
+        raise argparse.ArgumentTypeError("expected a value from 0 to 1")
+    return number
+
+
+def positive_int(value):
+    number = int(value)
+    if number < 1:
+        raise argparse.ArgumentTypeError("expected a positive integer")
+    return number
+
+
+def input_width(value):
+    width = int(value)
+    if width != 0 and width < 320:
+        raise argparse.ArgumentTypeError("expected 0 (native width) or at least 320")
+    return width
+
+
 def main():
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(
+        description=__doc__,
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+        fromfile_prefix_chars="@",
+    )
     parser.add_argument("--mode", choices=MODES, default="both")
     sources = parser.add_mutually_exclusive_group()
     sources.add_argument("--camera", type=int)
@@ -269,7 +342,23 @@ def main():
     sources.add_argument("--image", type=Path)
     parser.add_argument("--headless", action="store_true")
     parser.add_argument("--limit", type=int)
+    mp = parser.add_argument_group("Attentify MediaPipe settings")
+    mp.add_argument("--mp-width", type=input_width, help="maximum input width, or 0 for native")
+    mp.add_argument("--mp-confidence", type=probability, help="detection, presence and tracking threshold")
+    mp.add_argument("--mp-max-faces", type=positive_int, help="maximum number of faces")
+    mp.add_argument("--mp-tile-grid", type=int, choices=(1, 2, 3, 4), help="grid size per axis; 1 disables tiling")
+    mp.add_argument("--mp-adaptive", action=argparse.BooleanOptionalAction, help="enable adaptive detection")
+    mp.add_argument("--mp-scan-every", type=positive_int, help="frames between adaptive scans")
+    yu = parser.add_argument_group("OpenCV Zoo YuNet settings")
+    yu.add_argument("--yunet-width", type=input_width, help="maximum input width, or 0 for native")
+    yu.add_argument("--yunet-confidence", type=probability, help="detection confidence threshold")
+    yu.add_argument("--yunet-nms", type=probability, help="overlap threshold for suppressing duplicate boxes")
+    yu.add_argument("--yunet-top-k", type=positive_int, help="candidate limit before duplicate suppression")
+    parser.set_defaults(**vars(DEFAULT_SETTINGS))
     args = parser.parse_args()
+    settings = DetectorSettings(**{name: getattr(args, name) for name in vars(DEFAULT_SETTINGS)})
+    if settings.mp_adaptive and settings.mp_tile_grid < 2:
+        parser.error("--mp-tile-grid 1 requires --no-mp-adaptive")
     if args.limit is not None and args.limit < 1:
         parser.error("--limit must be positive")
     if args.camera is not None and args.camera < 0:
@@ -277,13 +366,13 @@ def main():
     if args.camera is None and args.clip is None and args.image is None:
         if args.headless or args.limit is not None:
             parser.error("--headless and --limit require --camera, --clip, or --image")
-        open_launcher()
+        open_launcher(settings)
     else:
         path = args.image or args.clip
         source = args.camera if path is None else str(path)
         try:
             run(args.mode, source, image=args.image is not None,
-                headless=args.headless, limit=args.limit)
+                headless=args.headless, limit=args.limit, settings=settings)
         except (OSError, RuntimeError, ValueError) as error:
             parser.exit(1, f"{error}\n")
 
