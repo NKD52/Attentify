@@ -15,6 +15,14 @@ ATTENTIFY = HERE.parent / "face-tracking-prototype"
 ZOO_REV = "48b10fa505aeb51fbd127fc60a5c660040e823b7"
 ZOO_MODEL = "face_detection_yunet_2023mar.onnx"
 ZOO_PATH = f"opencv/opencv_zoo/{ZOO_REV}/models/face_detection_yunet"
+# OpenCV Zoo's BGR colors, in YuNet's output order.
+YUNET_LANDMARK_COLORS = (
+    (255, 0, 0),    # Right eye
+    (0, 0, 255),    # Left eye
+    (0, 255, 0),    # Nose tip
+    (255, 0, 255),  # Right mouth corner
+    (0, 255, 255),  # Left mouth corner
+)
 IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png", ".bmp", ".webp", ".tif", ".tiff")
 MODES = {
     "both": ("MediaPipe", "YuNet"),
@@ -95,6 +103,9 @@ def build_processors(mode, stack):
                     frame, f"{face[-1]:.2f}", (x, max(15, y - 5)),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, (70, 200, 255), 1,
                 )
+                landmarks = face[4:14].astype(int).reshape(5, 2)
+                for point, color in zip(landmarks, YUNET_LANDMARK_COLORS):
+                    cv2.circle(frame, tuple(point), 2, color, 2)
             return len(faces)
 
         processors["YuNet"] = yunet
