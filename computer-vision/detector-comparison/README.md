@@ -12,7 +12,17 @@ Both panels default to a maximum input width of 640 px. MediaPipe uses Attentify
 
 The launcher prints average processing time per detector after each run. Timing includes inference, tracking if enabled, and box drawing. Use individual runs on the same clip to compare times without the other pipeline active.
 
-## Optional commands
+## Run from PowerShell
+
+From the Attentify repo root, open the comparison folder and list the available options:
+
+```powershell
+cd computer-vision\detector-comparison
+.\Start-Compare.cmd --help
+```
+
+Replace the sample paths below with your own files.
+
 
 ```powershell
 .\Start-Compare.cmd --mode both --camera 0
@@ -22,25 +32,46 @@ The launcher prints average processing time per detector after each run. Timing 
 .\Start-Compare.cmd --mode both --clip "D:\clips\classroom.mp4" --headless --limit 100
 ```
 
+## Launcher flags
+
+| Flag | Accepted values and behavior |
+| --- | --- |
+| `--mode` | `both` (default), `mediapipe`, or `yunet`. Applies when you supply a source on the command line. The picker has its own mode selector. |
+| `--camera` | Camera index, starting at `0`. Try `1` for a second camera. |
+| `--clip` | Path to a saved video. Quote paths that contain spaces. |
+| `--image` | Path to a still image. Quote paths that contain spaces. |
+| `--headless` | Process the input and print timing and detection totals without opening a preview. Requires a source. |
+| `--limit` | Positive maximum number of frames to process. Useful for testing a short portion of a clip. Requires a source. |
+| `-h`, `--help` | Show all options and their defaults. |
+
+Choose one source per command. To open the picker, omit the source, `--headless`, and `--limit`.
+
 ## Tune each detector
 
 The same flags work in individual and side-by-side runs. Each detector can use a different input width while receiving the same source frame. The side-by-side view scales the two previews to the same display size and labels each with its actual input width.
 
-| MediaPipe flag | Default | YuNet flag | Default |
-| --- | ---: | --- | ---: |
-| `--mp-width` | 640 | `--yunet-width` | 640 |
-| `--mp-confidence` | 0.50 | `--yunet-confidence` | 0.90 |
-| `--mp-max-faces` | 50 | `--yunet-nms` | 0.30 |
-| `--mp-tile-grid` | 4 | `--yunet-top-k` | 5000 |
-| `--mp-adaptive` / `--no-mp-adaptive` | On | | |
-| `--mp-scan-every` | 20 | | |
+| MediaPipe flag | Default | Accepted values and effect |
+| --- | ---: | --- |
+| `--mp-width` | 640 | Maximum input width in pixels. Use `0` for native resolution or an integer of at least `320`. |
+| `--mp-confidence` | 0.50 | `0` to `1`. Sets the detection, face presence, and tracking thresholds. |
+| `--mp-max-faces` | 50 | Positive integer. Caps the number of faces. |
+| `--mp-tile-grid` | 4 | `1` through `4`. A value of `4` uses a 4×4 grid. Use `--mp-tile-grid 1 --no-mp-adaptive` to disable tiling. |
+| `--mp-adaptive` / `--no-mp-adaptive` | On | Turns adaptive detection on or off. |
+| `--mp-scan-every` | 20 | Positive integer. Sets how many frames pass between adaptive scans. |
 
-Set a width to `0` to use native resolution. Use `--no-mp-adaptive` with `--mp-tile-grid 1`. The MediaPipe confidence applies to detection, presence, and tracking. The YuNet confidence applies to face detection.
+| YuNet flag | Default | Accepted values and effect |
+| --- | ---: | --- |
+| `--yunet-width` | 640 | Maximum input width in pixels. Use `0` for native resolution or an integer of at least `320`. |
+| `--yunet-confidence` | 0.90 | `0` to `1`. Sets the minimum face detection score. |
+| `--yunet-nms` | 0.30 | `0` to `1`. Sets the overlap threshold used to suppress duplicate boxes. |
+| `--yunet-top-k` | 5000 | Positive integer. Caps the candidates considered before duplicate suppression. |
 
 ```powershell
 .\Start-Compare.cmd --mode both --clip "D:\clips\classroom.mp4" --mp-confidence 0.55 --yunet-confidence 0.70
 .\Start-Compare.cmd --mode yunet --camera 1 --yunet-width 960 --yunet-confidence 0.70
 ```
+
+## Save and reuse a preset
 
 To save a preset, create `classroom.params` beside `Start-Compare.cmd`, or use an absolute path. Put one argument per line in plain text, using `=` for values. Copy the preset to the other PC to reuse it.
 
@@ -58,6 +89,12 @@ To save a preset, create `classroom.params` beside `Start-Compare.cmd`, or use a
 ```
 
 The second command opens the file and camera picker with the preset loaded. Add a flag after the preset to override that setting for one run.
+
+```powershell
+.\Start-Compare.cmd "@classroom.params" --mode yunet --camera 1 --yunet-confidence 0.65
+```
+
+## Model files
 
 The launcher reuses the sibling prototype's MediaPipe code, tracker, and `models/face_landmarker.task`. If the Google download is blocked and you already have the model, copy it into `../face-tracking-prototype/models/` and retry.
 
