@@ -5,6 +5,7 @@ Final Year Project (FYP) repository for student attention detection research.
 ## Structure
 
 - [`computer-vision/face-tracking-prototype/`](computer-vision/face-tracking-prototype/): Prototype 1, local multi-face detection and temporary tracking.
+- [`computer-vision/detector-comparison/`](computer-vision/detector-comparison/): Windows launcher for Attentify MediaPipe and OpenCV Zoo YuNet on cameras, clips, and images.
 - `experiments/random-forest/`: reserved for Random Forest experiments.
 
 ## Status
