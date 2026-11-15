@@ -1,0 +1,51 @@
+{
+  "schema_version": 1,
+  "yunet-fp32": {
+    "filename": "yunet.onnx",
+    "sha256": "8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4",
+    "task": "face detection",
+    "runtime_supported": true,
+    "source": "https://github.com/opencv/opencv_zoo/tree/main/models/face_detection_yunet"
+  },
+  "scb-refined-onnx-v1": {
+    "filename": "scb-refined.onnx",
+    "sha256": "a79c61b137e6c3ed125d27289ad615387925eb7b838a591704143fc33d30af72",
+    "source_checkpoint_sha256": "3568fb991121c44ab74e61c6882970257ba68f06b5f9ed641a7fc38d9991d1f2",
+    "classes": [
+      "handraise",
+      "reading",
+      "writing"
+    ],
+    "task": "candidate behavior detection",
+    "runtime_supported": true,
+    "status": "experimental refinement; not an attention classifier or universally superior checkpoint",
+    "source": "https://huggingface.co/datasets/wintonYF/SCB-Dataset"
+  },
+  "scb-original-pytorch": {
+    "sha256": "1f93f151286b21c89338fb8e229b218c5b1d061cc7361c042aca6d416a415857",
+    "runtime_supported": false,
+    "status": "preserved historical baseline; portable ONNX adapter not yet registered"
+  },
+  "head-6drepnet-handoff": {
+    "package": "sixdrepnet==0.1.6",
+    "checkpoint_sha256": null,
+    "runtime_supported": false,
+    "status": "inspected handoff; checkpoint verification and independent adapter pending"
+  },
+  "asset_pack": {
+    "filename": "attentify-models-v1.zip",
+    "sha256": "5d2d148fe08d2a2ab1c8b74faef7c04eb3ee208aa3ff9d58ae2393adf7307c99",
+    "parts": [
+      {
+        "name": "attentify-models-v1.zip.part00",
+        "bytes": 67108864,
+        "sha256": "3ce13cd3a9f842b6777992bab7a6068b6c7c6aeb6c63299650c27f65ad7f0e1d"
+      },
+      {
+        "name": "attentify-models-v1.zip.part01",
+        "bytes": 54698625,
+        "sha256": "124db2279b76257a14628fe1ee87ead60a5d9a65fa54661657bc03fd64871c90"
+      }
+    ]
+  }
+}
