@@ -1,6 +1,6 @@
 # Recorded-video scaling benchmark
 
-[Open the separate benchmark notebook](https://colab.research.google.com/github/NKD52/Attentify/blob/feature/scaling-benchmark/computer-vision/colab/Attentify_Scaling_Benchmark.ipynb). The ordinary tester stays on its existing branch and keeps its 640 defaults.
+[Open the separate benchmark notebook](https://colab.research.google.com/github/NKD52/Attentify/blob/main/computer-vision/colab/Attentify_Scaling_Benchmark.ipynb). The ordinary tester stays on its existing branch and keeps its 640 defaults.
 
 ## First run
 
@@ -45,4 +45,6 @@ python benchmark.py --clips clips.json --assets PATH_TO_VERIFIED_MODELS --backen
 
 ## Validation limits
 
-Automated checks cover resizing/box remapping, case matrix, preserved preview FPS/frame counts, raw-versus-snapshot separation, failure continuation and metadata. Actual-model CPU checks cover baseline prediction equivalence and configurable input sizes. Hosted CUDA benchmarking and larger real-classroom populations require user-side runs; local/synthetic checks are not minimum-hardware evidence. Head-pose scheduling, model precision changes, smaller alternatives and live-stream transport remain future experiments.
+Automated checks cover resizing/box remapping, case matrix, preserved preview FPS/frame counts, raw-versus-snapshot separation, failure continuation and metadata. Actual-model CPU checks cover baseline prediction equivalence and configurable input sizes. Hosted CUDA benchmarking and larger real-classroom populations require user-side runs; local/synthetic checks are not minimum-hardware evidence. Optional head cases now compare faces + head and the full pipeline, with separate head timing. Head scheduling, model precision changes, smaller alternatives and live-stream transport remain future experiments.
+
+Set `INCLUDE_HEAD_CASES=True` to add the two registered head cases. The notebook defaults to ten cases/two repeats (20 trials per clip) when these are enabled; disabling them preserves the previous eight-case matrix. Head assets are prepared separately from the action pack.

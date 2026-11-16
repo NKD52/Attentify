@@ -6,6 +6,59 @@ from core import digest,assemble
 REGISTER=Path(__file__).with_name('model-register.json')
 PARTS=['scb-refined.part00','scb-refined.part01','scb-refined.part02']
 
+def ensure_head_assets(source,destination):
+    """Head weights are separate from the existing immutable action pack."""
+    register=json.loads(REGISTER.read_text());spec=register['head-6drepnet-v1']
+    source=Path(source).expanduser();destination=Path(destination);destination.mkdir(parents=True,exist_ok=True)
+    target=destination/spec['filename']
+    if target.is_file() and digest(target)==spec['sha256']:return target
+    if source.is_file() and source.suffix.lower()=='.pth':
+        if digest(source)!=spec['sha256']:raise ValueError('Head checkpoint checksum mismatch')
+        temp=destination/(spec['filename']+'.'+uuid.uuid4().hex+'.tmp')
+        try:
+            with source.open('rb') as inp,temp.open('wb') as out:shutil.copyfileobj(inp,out)
+            temp.replace(target)
+        finally:temp.unlink(missing_ok=True)
+        return target
+    if source.is_file():
+        with zipfile.ZipFile(source) as archive:
+            def member(name,optional=False):
+                matches=[n for n in archive.namelist() if n==name or n.endswith('/assets/'+name)]
+                if not matches and optional:return None
+                if len(matches)!=1:raise FileNotFoundError('Head asset missing/ambiguous in ZIP: '+name+'; set HEAD_MODEL_SOURCE to its separate folder or disable head pose')
+                if archive.getinfo(matches[0]).file_size>160*1024*1024:raise ValueError('Unexpected head asset size')
+                return matches[0]
+            direct_member=member(spec['filename'],True)
+            entries=[{'name':spec['filename'],'sha256':spec['sha256']}] if direct_member else spec['parts']
+            for part in entries:
+                name=part['name']
+                if Path(name).name!=name:raise ValueError('Unexpected head asset path')
+                dest=destination/name
+                if dest.is_file() and digest(dest)==part['sha256']:continue
+                item=member(name);temp=destination/(name+'.'+uuid.uuid4().hex+'.tmp')
+                try:
+                    with archive.open(item) as inp,temp.open('wb') as out:shutil.copyfileobj(inp,out)
+                    if digest(temp)!=part['sha256']:raise ValueError('Head asset checksum mismatch: '+name)
+                    temp.replace(dest)
+                finally:temp.unlink(missing_ok=True)
+        return target if direct_member else assemble(destination,spec,target)
+    if not source.is_dir():raise FileNotFoundError('Head model source is missing')
+    direct=source/spec['filename']
+    names=[{'name':spec['filename'],'sha256':spec['sha256']}] if direct.is_file() else spec['parts']
+    for part in names:
+        name=part['name']
+        if Path(name).name!=name:raise ValueError('Unexpected head asset path')
+        path=source/name;dest=destination/name
+        if dest.is_file() and digest(dest)==part['sha256']:continue
+        if not path.is_file():raise FileNotFoundError('Head asset missing from model folder: '+name)
+        temp=destination/(name+'.'+uuid.uuid4().hex+'.tmp')
+        try:
+            with path.open('rb') as inp,temp.open('wb') as out:shutil.copyfileobj(inp,out)
+            if digest(temp)!=part['sha256']:raise ValueError('Head asset checksum mismatch: '+name)
+            temp.replace(dest)
+        finally:temp.unlink(missing_ok=True)
+    return target if direct.is_file() else assemble(destination,spec,target)
+
 def resolve_pack(source,destination,register):
     """A persistent folder may contain one ZIP or verified transport segments."""
     spec=register.get('asset_pack')

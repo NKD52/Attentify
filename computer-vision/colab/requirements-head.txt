@@ -1,0 +1,4 @@
+# Use a mutually compatible Torch/torchvision pair for the chosen CPU/CUDA runtime.
+torch>=2.6,<3
+torchvision>=0.21,<1
+sixdrepnet==0.1.6

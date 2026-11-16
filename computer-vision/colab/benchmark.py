@@ -17,15 +17,17 @@ class Case:
     action_size:int=640
     face_width:int=640
     output_width:int=0
+    enable_head:bool=False
 
     def __post_init__(self):
         if not re.fullmatch(r'[A-Za-z0-9_-]{1,80}',self.name):raise ValueError('Case name must use ASCII letters/digits/dashes/underscores')
         if self.mode not in ('faces','actions','combined'):raise ValueError('Invalid feature mode')
+        if self.enable_head and self.mode=='actions':raise ValueError('Head pose requires faces')
         if not isinstance(self.action_size,int) or self.action_size<32 or self.action_size%32:raise ValueError('Action size must be a multiple of 32')
         if not isinstance(self.face_width,int) or self.face_width<32:raise ValueError('Face width must be >=32')
         if not isinstance(self.output_width,int) or (self.output_width and (self.output_width<128 or self.output_width%2)):raise ValueError('Output width must be zero or an even integer >=128')
 
-def make_cases(action_sizes=(640,960),face_widths=(640,960),output_widths=(960,3840)):
+def make_cases(action_sizes=(640,960),face_widths=(640,960),output_widths=(960,3840),include_head=False):
     cases=[Case('faces-640','faces'),Case('actions-640','actions'),Case('combined-640')]
     for size in dict.fromkeys(action_sizes):
         if size!=640:cases.append(Case(f'action-{size}','combined',size,640))
@@ -34,6 +36,7 @@ def make_cases(action_sizes=(640,960),face_widths=(640,960),output_widths=(960,3
     if action_sizes and face_widths and (max(action_sizes),max(face_widths))!=(640,640):
         cases.append(Case('both-larger','combined',max(action_sizes),max(face_widths)))
     for width in dict.fromkeys(output_widths):cases.append(Case(f'output-{width}','combined',640,640,width))
+    if include_head:cases.extend([Case('faces-head','faces',enable_head=True),Case('combined-head',enable_head=True)])
     return cases
 
 def preview_frame(current,snapshot,result,seconds,width):
@@ -49,6 +52,7 @@ def preview_frame(current,snapshot,result,seconds,width):
         for kind in view:
             for box in result[kind]:
                 item=dict(box);item['box']=(np.array(box['box'])*[sx,sy,sx,sy]).tolist();view[kind].append(item)
+        view['head_poses']=[dict(p,face_box=(np.array(p['face_box'])*[sx,sy,sx,sy]).tolist()) for p in result.get('head_poses',[])]
         canvas[36:36+ph,pw:]=draw(scaled,view)
         text=f'Snapshot {result["source_seconds"]:.2f}s | source gap {age:.2f}s'
     else:text='No fresh inference snapshot'
@@ -69,6 +73,7 @@ def source_info(clip):
 def code_provenance():
     here=Path(__file__).parent
     paths=[here/n for n in ['benchmark.py','benchmark_resources.py','colab_runtime.py','review_package.py','workspace_storage.py','model-register.json']]
+    paths.append(here/'head_pose.py')
     paths += [here.parent/'team-pilot'/n for n in ['core.py','tracker.py','association.py']]
     report={'file_sha256':{str(p.relative_to(here.parent)):digest(p) for p in paths},'python':platform.python_version(),'opencv':cv2.__version__,'numpy':np.__version__,'cpu_logical_count':__import__('os').cpu_count(),'cpu_description':platform.processor(),'opencv_threads':cv2.getNumThreads()}
     try:
@@ -87,7 +92,8 @@ def run_case(clip,info,assets,case,folder,backend,stride,max_source_frames,warmu
         cap=cv2.VideoCapture(str(clip['path']));ok,first=cap.read();fps=cap.get(cv2.CAP_PROP_FPS)
         if not ok or not np.isfinite(fps) or fps<=0:raise ValueError('No decodable frame or invalid source FPS')
         settings.update(source_fps=fps,source_width=first.shape[1],source_height=first.shape[0])
-        tick=time.perf_counter();engine=engine_factory(assets,backend=backend,feature_mode=case.mode,action_size=case.action_size,face_width=case.face_width)
+        options={'enable_head':True} if case.enable_head else {}
+        tick=time.perf_counter();engine=engine_factory(assets,backend=backend,feature_mode=case.mode,action_size=case.action_size,face_width=case.face_width,**options)
         init_ms=(time.perf_counter()-tick)*1000;engine_config=engine.config
         tick=time.perf_counter()
         for _ in range(warmup):engine.infer(first,0)
@@ -101,6 +107,7 @@ def run_case(clip,info,assets,case,folder,backend,stride,max_source_frames,warmu
             if index%stride==0:
                 tick=time.perf_counter();result=engine.infer(frame,seconds);row['inference_ms']=(time.perf_counter()-tick)*1000;row['inferred']=True
                 result.update(source_frame_id=index,run_id=folder.name,timestamp_basis='video_relative_seconds')
+                for head in result.get('head_poses',[]):head.update(source_frame_id=index,run_id=folder.name,timestamp_basis='video_relative_seconds')
                 observations.append(result);last_result=result;last_frame=frame
                 totals['inference_ms']+=row['inference_ms']
             row['snapshot_source_gap_ms']=None if last_result is None else (seconds-last_result['source_seconds'])*1000
@@ -132,7 +139,7 @@ def run_case(clip,info,assets,case,folder,backend,stride,max_source_frames,warmu
             output=csv.DictWriter(f,fieldnames=list(records[0]));output.writeheader();output.writerows(records)
     model=stats([r['combined_ms'] for r in observations]);phase_keys={k for r in observations for k in r.get('phases_ms',{})}
     n=len(records);updates=len(observations)
-    summary=dict(case_name=case.name,case_directory=folder.name,feature_mode=case.mode,action_size=case.action_size,face_width=case.face_width,output_width=case.output_width,
+    summary=dict(case_name=case.name,case_directory=folder.name,feature_mode=case.mode,enable_head=case.enable_head,action_size=case.action_size,face_width=case.face_width,output_width=case.output_width,
         visible_students=info['visible_students'],source_label=info['label'],status='failed' if error else 'completed',error=error,
         decoded_frames=n,inference_updates=updates,source_fps=fps,source_width=settings.get('source_width'),source_height=settings.get('source_height'),
         initialization_ms=init_ms,warmup_ms=warmup_ms,pipeline_elapsed_s=pipeline_s,trial_wall_s=time.perf_counter()-trial_start,

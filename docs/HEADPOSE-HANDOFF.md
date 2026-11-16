@@ -1,4 +1,6 @@
-# Head-pose handoff inspection — 15 November 2026
+# Head-pose handoff inspection � 15 November 2026
+
+The following is the original inspection record. The optional adapter has since been implemented; see [current integration](HEADPOSE-INTEGRATION.md).
 
 ## What was actually supplied
 
