@@ -9,7 +9,7 @@ def cell(kind,text):
     cells.append(c)
 
 cell('markdown', '''# Attentify - portable testing workspace
-Use the same GitHub code and registered private weights in Colab or on a new PC. Choose **faces**, **actions**, or **combined**. Current action model: experimental refined YOLOv7 (handraise/reading/writing). Head pose is registered as pending, not integrated. No training, attention prediction or permanent student identity is provided.
+Use the same GitHub code and registered private weights in Colab or on a new PC. Choose **faces**, **actions**, or **combined**. Current action model: experimental refined YOLOv7 (handraise/reading/writing). Optional 6DRepNet head pose uses the same YuNet faces. Enable it with faces mode for a standalone head test, or combined mode for the full prototype. No training, attention prediction or permanent student identity is provided.
 
 Run sections 1-3, then section 4 (image/video) OR section 5 (camera). Change the visible settings and rerun the affected cells. For code updates, rerun setup to fetch the chosen GitHub revision. Every result records the actual revision, source fingerprint, model hashes, settings and timings.
 
@@ -18,10 +18,13 @@ Keep the registered model pack in a private Drive folder. Each teammate needs a 
 cell('markdown','## 1. Load dependencies and the chosen GitHub code version\nSelect Runtime > Change runtime type > GPU for CUDA. CPU is also supported. If Colab requests a restart after installation, restart and rerun this cell. The GPU belongs to Colab, not your laptop. Your local working files are never overwritten by this setup.')
 cell('code', '''import subprocess,sys,json
 from pathlib import Path
-CODE_REF='feature/portable-workspace' # Branch, tag or immutable commit SHA
+CODE_REF='main' # Branch, tag or immutable commit SHA
 FEATURE_MODE='combined' # 'faces', 'actions', 'combined'
+ENABLE_HEAD_POSE=True # Disable for the previous face/action baseline
+HEAD_BATCH_SIZE=4
 BACKEND='cuda' # 'cpu' explicitly selects CPU action inference
 if FEATURE_MODE not in ('faces','actions','combined'):raise ValueError('Choose faces, actions or combined')
+if ENABLE_HEAD_POSE and FEATURE_MODE=='actions':raise ValueError('Head pose requires faces or combined mode')
 dependencies=['opencv-python-headless==4.12.0.88','numpy==2.2.6']
 if FEATURE_MODE!='faces':
     package='onnxruntime-gpu==1.23.2' if BACKEND=='cuda' else 'onnxruntime==1.23.2'
@@ -30,7 +33,8 @@ if FEATURE_MODE!='faces':
     subprocess.check_call([sys.executable,'-m','pip','uninstall','-y',alternate],stdout=subprocess.DEVNULL)
     dependencies.append(package)
 subprocess.check_call([sys.executable,'-m','pip','install','-q',*dependencies])
-if FEATURE_MODE!='faces' and BACKEND=='cuda':
+if ENABLE_HEAD_POSE:subprocess.check_call([sys.executable,'-m','pip','install','-q','--no-deps','sixdrepnet==0.1.6'])
+if (FEATURE_MODE!='faces' or ENABLE_HEAD_POSE) and BACKEND=='cuda':
     import torch # Load Colab's CUDA/cuDNN libraries before ONNX Runtime
 REPO=Path('/content/attentify-source')
 if not REPO.exists():subprocess.check_call(['git','clone','https://github.com/NKD52/Attentify.git',str(REPO)])
@@ -41,10 +45,10 @@ subprocess.check_call(['git','checkout','--detach','FETCH_HEAD'],cwd=REPO)
 CODE=REPO/'computer-vision/colab'
 sys.path[:0]=[str(CODE),str(REPO/'computer-vision/team-pilot')]
 # Reload after fetching an update; existing engine objects are recreated in section 3.
-for name in ['browser_camera','colab_runtime','workspace_storage','review_package','core','tracker','association']:
+for name in ['browser_camera','colab_runtime','workspace_storage','review_package','head_pose','core','tracker','association']:
     sys.modules.pop(name,None)
 print('Code commit:',subprocess.check_output(['git','rev-parse','HEAD'],cwd=REPO,text=True).strip())
-if FEATURE_MODE!='faces' and BACKEND=='cuda':print('Remote GPU:',torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'none')
+if (FEATURE_MODE!='faces' or ENABLE_HEAD_POSE) and BACKEND=='cuda':print('Remote GPU:',torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'none')
 else:print('Selected inference uses CPU')
 ''')
 cell('markdown','## 2. Storage and threshold settings\nDrive mode connects your Google Drive and reuses the private model folder. The distributed model pack has two parts; loading and verification are automatic. Your first run must authorize the connection. A local path here means a path inside the Colab runtime, not D: on your laptop. Upload mode is optional for a full ZIP. Results can stay temporarily in Colab or be saved under a private writable Drive folder. Drive mounting grants notebook code access to your Drive; use only trusted code. Choose FEATURE_MODE in section 1.')
@@ -53,6 +57,7 @@ ACTION_MODEL_ID='scb-refined-onnx-v1' # Only this action version has a portable 
 CONFIDENCE=0.50
 NMS_IOU=0.45
 MODEL_SOURCE='/content/drive/MyDrive/YOUR_MODEL_FOLDER' # Set this privately; do not commit your private path
+HEAD_MODEL_SOURCE='' # Empty reuses MODEL_SOURCE; or set a separate head folder/.pth/ZIP
 RESULTS_ROOT='/content/attentify-results' # Change to your private Drive path for persistent results
 if STORAGE=='drive':
     from google.colab import drive
@@ -63,13 +68,17 @@ elif STORAGE=='upload':
     if len(uploaded)!=1:raise ValueError('Upload exactly one private model ZIP')
     MODEL_SOURCE=next(iter(uploaded));del uploaded
 elif STORAGE!='path':raise ValueError('Choose drive, path or upload')
-print('Mode:',FEATURE_MODE,'| Models:',MODEL_SOURCE,'| Results:',RESULTS_ROOT)
+if 'YOUR_MODEL_FOLDER' in MODEL_SOURCE:
+    from getpass import getpass
+    MODEL_SOURCE=getpass('Private model folder path (not saved in notebook code): ').strip()
+print('Mode:',FEATURE_MODE,'| Private model source selected')
 ''')
 cell('markdown','## 3. Initialize only the selected features\nModel checksums must match the register. The model ZIP is copied into the temporary runtime cache to avoid repeated small Drive reads. This cache copy is automatic on a fresh session; you do not reupload the ZIP. A requested CUDA action run fails if CUDA is unavailable. YuNet uses CPU even in combined CUDA mode.')
-cell('code', '''from workspace_storage import ensure_assets
+cell('code', '''from workspace_storage import ensure_assets,ensure_head_assets
 from colab_runtime import Engine,process_media
 assets=ensure_assets(MODEL_SOURCE,'/content/attentify-model-cache',FEATURE_MODE)
-engine=Engine(assets,BACKEND,CONFIDENCE,NMS_IOU,FEATURE_MODE,ACTION_MODEL_ID)
+if ENABLE_HEAD_POSE:ensure_head_assets(HEAD_MODEL_SOURCE or MODEL_SOURCE,assets)
+engine=Engine(assets,BACKEND,CONFIDENCE,NMS_IOU,FEATURE_MODE,ACTION_MODEL_ID,enable_head=ENABLE_HEAD_POSE,head_batch_size=HEAD_BATCH_SIZE)
 print(json.dumps(engine.config,indent=2))
 ''')
 cell('markdown','## 4. Test an image/video and download a review package\nUse an existing Drive/runtime path or upload one file. Default: every fifth video frame, up to 300 processed frames, with a review sample every 10 processed frames. Review samples include frames with no action detections so you can report misses. Extract the returned ZIP and open review/index.html, then export your answers as JSON. Send that review JSON with the run ZIP. This diagnostic sampling is not an accuracy test.\n\nThe ZIP contains identifiable annotated media and sampled raw review images. Set REVIEW_EVERY=0 to disable review images; image/video mode still writes the annotated output. Use only permitted footage. Three warm-ups are excluded from processing timings; decoding, encoding and network delays are excluded too.')
@@ -97,7 +106,7 @@ result_zip=run_camera(engine,CAMERA_SECONDS,RESULTS_ROOT,CAMERA_REVIEW_EVERY)
 print('Saved:',result_zip)
 files.download(str(result_zip))
 ''')
-cell('markdown','## Updating and teamwork\nKeep working models intact. Change code on a branch, open this notebook, choose CODE_REF and rerun setup plus initialization. Keep downloaded run ZIPs and exported review JSONs. Dataset train/validation/test groups must stay separate; repeatedly reviewed examples are development evidence. New trained weights require a new registered model ID and checksum before they can be selected. The original PyTorch action model and the head handoff are preserved in the register as unsupported pending adapters; they are not silently substituted.\n\nEach teammate uses their own runtime and authorized private storage. Code is shared through GitHub; model files and data are not publicly distributed by this notebook. A single-person camera trial does not establish classroom accuracy or minimum hardware.\n\nReferences: [Colab FAQ](https://research.google.com/colaboratory/faq.html), [Google camera snippet](https://colab.research.google.com/notebooks/snippets/advanced_outputs.ipynb), [ONNX CUDA requirements](https://onnxruntime.ai/docs/execution-providers/CUDA-ExecutionProvider.html).')
-nb=dict(nbformat=4,nbformat_minor=5,metadata=dict(colab=dict(name='Attentify_Colab_Testing.ipynb'),kernelspec=dict(name='python3',display_name='Python 3'),accelerator='GPU'),cells=cells)
+cell('markdown','## Updating and teamwork\nKeep working models intact. Change code on a branch, open this notebook, choose CODE_REF and rerun setup plus initialization. Keep downloaded run ZIPs and exported review JSONs. Dataset train/validation/test groups must stay separate; repeatedly reviewed examples are development evidence. New trained weights require a new registered model ID and checksum before they can be selected. Head outputs are pitch/yaw/roll degrees with temporary track IDs, registered weight hashes and separate timing. Tiny/invalid crops remain unknown. Human direction and mirror categories need a known-motion check. Disable ENABLE_HEAD_POSE to compare the previous baseline. The original PyTorch action model remains registered without a portable adapter.\n\nEach teammate uses their own runtime and authorized private storage. Code is shared through GitHub; model files and data are not publicly distributed by this notebook. A single-person camera trial does not establish classroom accuracy or minimum hardware.\n\nReferences: [6DRepNet](https://github.com/thohemp/6DRepNet), [Colab FAQ](https://research.google.com/colaboratory/faq.html), [Google camera snippet](https://colab.research.google.com/notebooks/snippets/advanced_outputs.ipynb), [ONNX CUDA requirements](https://onnxruntime.ai/docs/execution-providers/CUDA-ExecutionProvider.html).')
+nb=dict(nbformat=4,nbformat_minor=5,metadata=dict(colab=dict(name='Attentify_Colab_Testing.ipynb',private_outputs=True),kernelspec=dict(name='python3',display_name='Python 3'),accelerator='GPU'),cells=cells)
 (HERE/'Attentify_Colab_Testing.ipynb').write_text(json.dumps(nb,indent=1),encoding='utf-8')
 print('Built',HERE/'Attentify_Colab_Testing.ipynb')
