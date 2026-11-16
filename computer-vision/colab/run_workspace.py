@@ -13,12 +13,15 @@ def main():
     p.add_argument('--features',choices=['faces','actions','combined'])
     p.add_argument('--backend',choices=['cpu','cuda'])
     p.add_argument('--results',help='Output directory; overrides results_root')
+    p.add_argument('--head',action='store_true',help='Enable head pose on shared faces')
+    p.add_argument('--head-batch-size',type=int,default=4)
     a=p.parse_args();config=json.loads(a.config.read_text())
-    from workspace_storage import ensure_assets
+    from workspace_storage import ensure_assets,ensure_head_assets
     from colab_runtime import Engine,process_media
     mode=a.features or config['feature_mode']
     assets=ensure_assets(a.models or config['model_source'],config['asset_cache'],mode)
-    e=Engine(assets,a.backend or config['backend'],config['confidence'],config['nms_iou'],mode,config['action_model_id'])
+    if a.head:ensure_head_assets(a.models or config['model_source'],assets)
+    e=Engine(assets,a.backend or config['backend'],config['confidence'],config['nms_iou'],mode,config['action_model_id'],enable_head=a.head,head_batch_size=a.head_batch_size)
     result=process_media(e,a.source,config['stride'],config['max_processed_frames'],a.results or config['results_root'],config['review_every'])
     print('Results:',result)
 
