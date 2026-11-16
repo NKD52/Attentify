@@ -5,7 +5,7 @@ HERE=Path(__file__).resolve().parent
 baseline=json.loads((HERE/'Attentify_Colab_Testing.ipynb').read_text())
 setup=next(''.join(c['source']) for c in baseline['cells'] if c['cell_type']=='code')
 setup=setup.replace("CODE_REF='feature/portable-workspace'","CODE_REF='main'")
-setup += "\nfor module_name in ['benchmark','benchmark_resources']:\n    sys.modules.pop(module_name,None)\n"
+setup += "\nfor module_name in ['benchmark','benchmark_resources','profile_pipeline']:\n    sys.modules.pop(module_name,None)\n"
 setup += "\nsubprocess.check_call([sys.executable,'-m','pip','install','-q','psutil>=6,<8'])\n"
 cells=[]
 def cell(kind,text):
@@ -46,8 +46,9 @@ elif INPUT_MODE!='path':raise ValueError('Choose upload or path')
 print(CLIPS)
 # You can edit student counts in CLIPS before the next cell.
 ''')
-cell('markdown','## 4. Run the controlled matrix\nSizes affect face detection and action inference independently. Output tests hold both model sizes at 640. Width 960 creates a small two-panel preview; width 3840 compares a larger encoding workload, not higher-resolution inference. The actual encoded dimensions are recorded. Preview movies retain the source frame rate: current raw source on the left, the matching dated inference snapshot on the right. Old boxes are never overlaid on current students.\n\nGPU memory is a sampled maximum for the whole Python process, including initialization/warm-up and any retained context; it is not exact peak/model-exclusive VRAM. Missing measurements stay null. Review samples, if enabled, are generated after timing and contain identifiable images. Set REVIEW_EVERY=0 for speed-only runs. No outputs are published or sent automatically.')
+cell('markdown','## 4. Run the controlled matrix or focused profiler\nSet RUN_MODE to profile for a short 250-source-frame diagnostic on one clip. It runs a no-export baseline with sampled remote GPU busy percentage, then a separate PyTorch CPU/CUDA trace and ONNX provider trace. Profile timings contain overhead and are not normal FPS results. No images or movies are exported in profile mode.\n\nSizes affect face detection and action inference independently. Output tests hold both model sizes at 640. Width 960 creates a small two-panel preview; width 3840 compares a larger encoding workload, not higher-resolution inference. The actual encoded dimensions are recorded. Preview movies retain the source frame rate: current raw source on the left, the matching dated inference snapshot on the right. Old boxes are never overlaid on current students.\n\nGPU memory is a sampled maximum for the whole Python process, including initialization/warm-up and any retained context; it is not exact peak/model-exclusive VRAM. Missing measurements stay null. Review samples, if enabled, are generated after timing and contain identifiable images. Set REVIEW_EVERY=0 for speed-only runs. No outputs are published or sent automatically.')
 cell('code', '''from benchmark import make_cases,run_suite
+RUN_MODE='benchmark' # 'profile' runs one short no-export baseline plus diagnostic traces
 ACTION_SIZES=(640,960) # Add 1280 later if needed; dynamic input sizes must be multiples of 32
 FACE_WIDTHS=(640,960)
 OUTPUT_WIDTHS=(960,3840) # Use (960,) to omit the more expensive large output case
@@ -58,16 +59,28 @@ WARMUP_INFERENCES=3
 REVIEW_EVERY=10 # One raw/numbered review sample per ten inference updates; 0 disables images
 cases=make_cases(ACTION_SIZES,FACE_WIDTHS,OUTPUT_WIDTHS,include_head=INCLUDE_HEAD_CASES)
 print('Trials:',len(CLIPS)*len(cases)*REPEATS)
-result_zip=run_suite(CLIPS,assets,cases=cases,backend=BACKEND,results_root=RESULTS_ROOT,
-    stride=INFERENCE_STRIDE,max_source_frames=MAX_SOURCE_FRAMES,repeats=REPEATS,
-    warmup=WARMUP_INFERENCES,review_every=REVIEW_EVERY)
+if RUN_MODE=='profile':
+    if len(CLIPS)!=1:raise ValueError('Select one clip for focused profiling')
+    from profile_pipeline import run_profile
+    result_zip=run_profile(CLIPS[0],assets,backend=BACKEND,enable_head=INCLUDE_HEAD_CASES,
+        max_source_frames=250,stride=INFERENCE_STRIDE,results_root=RESULTS_ROOT)
+elif RUN_MODE=='benchmark':
+    result_zip=run_suite(CLIPS,assets,cases=cases,backend=BACKEND,results_root=RESULTS_ROOT,
+        stride=INFERENCE_STRIDE,max_source_frames=MAX_SOURCE_FRAMES,repeats=REPEATS,
+        warmup=WARMUP_INFERENCES,review_every=REVIEW_EVERY)
+else:raise ValueError('Choose benchmark or profile')
 print('Saved:',result_zip)
 ''')
 cell('markdown','## 5. Inspect and download results\nCompare decode, face processing, action preprocessing/runtime/postprocessing, rendering and encoding separately. Pipeline throughput includes decoding every source frame, including skipped inference frames, and encoder finalization. Model initialization and warm-up are reported separately. The timed pipeline excludes final review generation, JSON/CSV export, ZIP creation and upload/download.\n\n**This is offline:** source-time snapshot gaps describe the scheduling gap in the output, not camera exposure-to-screen latency. Failed cases remain failed and are not silently retried with smaller inputs or CPU. Compare quality using the exported reviews before choosing a faster configuration. A test with few inference updates is only a smoke test.')
 cell('code', '''import pandas as pd,zipfile,json
 with zipfile.ZipFile(result_zip) as z:
-    name=next(n for n in z.namelist() if n.endswith('comparison.csv'))
-    with z.open(name) as f:table=pd.read_csv(f)
+    if RUN_MODE=='profile':
+        name=next(n for n in z.namelist() if n.endswith('profile-summary.json'))
+        report=json.loads(z.read(name));print(json.dumps(report,indent=2))
+        table=pd.DataFrame([report['baseline']])
+    else:
+        name=next(n for n in z.namelist() if n.endswith('comparison.csv'))
+        with z.open(name) as f:table=pd.read_csv(f)
 columns=['source_label','repeat','case_name','status','median_model_ms','pipeline_elapsed_s',
          'decoded_source_frames_per_wall_s','inference_updates_per_wall_s','realtime_factor',
          'median_yunet_tracking_ms','median_action_runtime_ms','median_head_pose_ms',
