@@ -13,7 +13,7 @@ This is a register of selected existing work, not a new model evaluation or a cl
 | YuNet | Selected face detector from local detector comparisons | Runnable alone or alongside actions |
 | Human SCB/Mustafa/DIPSER reviews | Review evidence identifies missing labels, wrong cues and boundary errors; repeatedly reviewed footage is development data | Earlier review files remain local; new run review format is portable |
 | Friend camera trials | Useful hardware/qualitative checks, not labelled classroom accuracy | Private files remain local; no friend footage is included here |
-| 6DRepNet handoff | Pretrained face-crop head estimation; original demo uses Haar and CPU | Inspected, pending explicit checkpoint and independent adapter |
+| 6DRepNet handoff | Pretrained face-crop head estimation; original demo uses Haar and CPU | Registered optional adapter and verified upstream checkpoint; CPU parity/execution checked, classroom angle accuracy pending |
 
 ## Continuing on another PC
 
