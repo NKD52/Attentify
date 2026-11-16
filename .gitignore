@@ -26,3 +26,13 @@ outputs/
 *.task
 *.download
 .env
+
+# Portable workspace: private weights and generated evidence
+.cache/
+.tmp/
+results/
+models/
+*.onnx
+*.pt
+*.pth
+*.zip

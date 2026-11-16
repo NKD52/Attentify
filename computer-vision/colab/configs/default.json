@@ -1,0 +1,13 @@
+{
+  "feature_mode": "combined",
+  "action_model_id": "scb-refined-onnx-v1",
+  "backend": "cpu",
+  "model_source": "models/attentify-models-v1.zip",
+  "asset_cache": ".cache/attentify-models",
+  "results_root": "results",
+  "confidence": 0.5,
+  "nms_iou": 0.45,
+  "stride": 5,
+  "max_processed_frames": 300,
+  "review_every": 10
+}
