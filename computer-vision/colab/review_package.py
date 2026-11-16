@@ -16,10 +16,14 @@ class ReviewPackage:
         for i,a in enumerate(result.get('actions',[])):
             x,y,r,b=map(int,a['box']);cv2.rectangle(annotated,(x,y),(r,b),(0,150,255),2)
             cv2.putText(annotated,str(i+1),(x,max(18,y+18)),0,.6,(0,150,255),2)
+        for i,p in enumerate(result.get('head_poses',[])):
+            x,y,r,b=map(int,p['face_box']);cv2.rectangle(annotated,(x,y),(r,b),(80,230,100),1)
+            text=f"H{i+1} P{p['pitch']:+.0f} Y{p['yaw']:+.0f} R{p['roll']:+.0f}" if p['status']=='estimated' else f'H{i+1} unknown'
+            cv2.putText(annotated,text,(x,max(18,y)),0,.5,(80,230,100),1)
         for suffix,image in [('raw',raw),('proposals',annotated)]:
             if not cv2.imwrite(str(folder/f'{name}-{suffix}.jpg'),image):raise RuntimeError('Cannot save review frame')
         self.frames.append(dict(review_frame_id=name,source_frame_id=result.get('source_frame_id'),
-            source_seconds=result.get('source_seconds'),actions=result.get('actions',[]),
+            source_seconds=result.get('source_seconds'),actions=result.get('actions',[]),head_poses=result.get('head_poses',[]),
             raw_image=f'{name}-raw.jpg',proposal_image=f'{name}-proposals.jpg'))
 
     def finish(self):
@@ -35,8 +39,11 @@ class ReviewPackage:
                 cue=html.escape(str(a['cue']))
                 rows.append(f'<label>Box {j+1}: {cue}, score {a["score"]:.2f} '+
                     f'<select data-key="{key}:box:{j}"><option value="">Unreviewed</option>'+''.join(f'<option>{s}</option>' for s in ['Correct visible cue','Wrong cue / non-action','Wrong student / merged people','Unclear'])+'</select></label>')
+            for j,p in enumerate(f['head_poses']):
+                values=f"pitch {p['pitch']:.1f}, yaw {p['yaw']:.1f}, roll {p['roll']:.1f}" if p['status']=='estimated' else 'unknown crop/estimate'
+                rows.append(f'<label>Head H{j+1}: {values} degrees <select data-key="{key}:head:{j}"><option value="">Unreviewed</option><option>Estimate plausible</option><option>Wrong face/crop</option><option>Implausible estimate</option><option>Unclear; needs known-motion check</option></select></label>')
             visible=''.join(f'<label>Visible {cue}: <select data-key="{key}:visible:{cue}"><option value="">Unreviewed</option><option>Yes</option><option>No</option><option>Unclear</option></select></label>' for cue in ['handraise','reading','writing'])
-            cards.append(f'<section><h2>{key} · source frame {f["source_frame_id"]} · {f["source_seconds"]} s</h2>'+
+            cards.append(f'<section><h2>{key} � source frame {f["source_frame_id"]} � {f["source_seconds"]} s</h2>'+
                 f'<div class="images"><figure><img src="{f["raw_image"]}"><figcaption>Raw source</figcaption></figure><figure><img src="{f["proposal_image"]}"><figcaption>Numbered action proposals</figcaption></figure></div>'+visible+
                 (''.join(rows) or '<p>No action proposals. Still check for missed visible actions.</p>')+
                 f'<label>Missed students, boundaries or uncertainty:<textarea data-key="{key}:notes"></textarea></label></section>')
