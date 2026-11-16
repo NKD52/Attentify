@@ -4,7 +4,7 @@ from pathlib import Path
 HERE=Path(__file__).resolve().parent
 baseline=json.loads((HERE/'Attentify_Colab_Testing.ipynb').read_text())
 setup=next(''.join(c['source']) for c in baseline['cells'] if c['cell_type']=='code')
-setup=setup.replace("CODE_REF='feature/portable-workspace'","CODE_REF='feature/scaling-benchmark'")
+setup=setup.replace("CODE_REF='feature/portable-workspace'","CODE_REF='main'")
 setup += "\nfor module_name in ['benchmark','benchmark_resources']:\n    sys.modules.pop(module_name,None)\n"
 setup += "\nsubprocess.check_call([sys.executable,'-m','pip','install','-q','psutil>=6,<8'])\n"
 cells=[]
@@ -18,17 +18,21 @@ This is separate from the ordinary tester. It compares **faces only**, **actions
 
 Use the same clip on different machines to compare hardware. Use several genuine classroom clips with different student counts to investigate crowd scaling. **Detected face count is not true student count.** A larger inference size cannot restore details that were absent in the camera recording.
 
-The default matrix has eight cases and two repeats: 16 trials per clip, processing at most the first 250 source frames each. It may take several minutes on GPU and much longer on CPU. Every case uses the same frame window and stride; even repeats reverse the case order to reduce ordering bias. Start with one short clip. Head pose is not integrated yet.
+The baseline has eight cases; enabling head pose adds two cases, giving 20 trials per clip with two repeats, processing at most the first 250 source frames each. It may take several minutes on GPU and much longer on CPU. Every case uses the same frame window and stride; even repeats reverse the case order to reduce ordering bias. Start with one short clip. Head cases use bounded crop batches and report their own timing.
 ''')
-cell('markdown','## 1. Load benchmark code and dependencies\nSelect a GPU runtime for CUDA. This notebook fetches a separate GitHub branch; it leaves the ordinary tester unchanged. Restart the runtime if switching ONNX Runtime package/backend after it has already been imported.')
+cell('markdown','## 1. Load benchmark code and dependencies\nSelect a GPU runtime for CUDA. This notebook loads the merged main branch; choose another CODE_REF for an isolated experiment. Restart the runtime if switching ONNX Runtime package/backend after it has already been imported.')
 cell('code',setup)
 cell('markdown','## 2. Private model storage\nSet your own private model folder path. Drive model segments are joined and verified automatically; no repeated manual ZIP upload is needed. Connecting Drive grants the notebook access to it. Keep private paths and outputs out of GitHub commits.')
 cell('code', '''from google.colab import drive
 drive.mount('/content/drive')
 MODEL_SOURCE='/content/drive/MyDrive/YOUR_MODEL_FOLDER'
+from getpass import getpass
+MODEL_SOURCE=getpass('Private model folder path (not saved in notebook code): ').strip()
 RESULTS_ROOT='/content/attentify-benchmarks' # Or a private writable Drive path
-from workspace_storage import ensure_assets
+INCLUDE_HEAD_CASES=True
+from workspace_storage import ensure_assets,ensure_head_assets
 assets=ensure_assets(MODEL_SOURCE,'/content/attentify-model-cache','combined')
+if INCLUDE_HEAD_CASES:ensure_head_assets(MODEL_SOURCE,assets)
 ''')
 cell('markdown','## 3. Select recorded clips\nUpload one or more clips, or provide paths already in Colab/Drive. Visible student counts are optional human-supplied metadata, not labels generated from face detection. Leave null/None if unknown. Files uploaded to Colab disappear when the runtime is deleted.')
 cell('code', '''INPUT_MODE='upload' # 'upload' or 'path'
@@ -52,7 +56,7 @@ MAX_SOURCE_FRAMES=250
 INFERENCE_STRIDE=5
 WARMUP_INFERENCES=3
 REVIEW_EVERY=10 # One raw/numbered review sample per ten inference updates; 0 disables images
-cases=make_cases(ACTION_SIZES,FACE_WIDTHS,OUTPUT_WIDTHS)
+cases=make_cases(ACTION_SIZES,FACE_WIDTHS,OUTPUT_WIDTHS,include_head=INCLUDE_HEAD_CASES)
 print('Trials:',len(CLIPS)*len(cases)*REPEATS)
 result_zip=run_suite(CLIPS,assets,cases=cases,backend=BACKEND,results_root=RESULTS_ROOT,
     stride=INFERENCE_STRIDE,max_source_frames=MAX_SOURCE_FRAMES,repeats=REPEATS,
@@ -66,7 +70,7 @@ with zipfile.ZipFile(result_zip) as z:
     with z.open(name) as f:table=pd.read_csv(f)
 columns=['source_label','repeat','case_name','status','median_model_ms','pipeline_elapsed_s',
          'decoded_source_frames_per_wall_s','inference_updates_per_wall_s','realtime_factor',
-         'median_yunet_tracking_ms','median_action_runtime_ms',
+         'median_yunet_tracking_ms','median_action_runtime_ms','median_head_pose_ms',
          'mean_detected_faces','sampled_max_process_gpu_memory_mib']
 display(table[[c for c in columns if c in table]])
 from google.colab import files
@@ -74,8 +78,8 @@ files.download(str(result_zip))
 ''')
 cell('markdown','''Extract the ZIP. `comparison.csv` and `comparison.json` summarize all cases; each case folder contains settings, `frames.csv`, predictions and optional preview/review files. Open a case's `review/index.html` and export answers before switching browsers. Send the run ZIP plus exported review JSONs for analysis. Compare identical sources/code/model versions and repeated trials; do not infer minimum hardware or classroom accuracy from a single clip.
 
-Next: collect genuine clips with larger classes, review resolution/quality trade-offs, and only then choose an optimization. Smaller models, lower precision, temporal scheduling and head-pose batching remain future experiments, not changes silently applied here.
+Next: collect genuine clips with larger classes, review resolution/quality trade-offs, and only then choose an optimization. Smaller models, lower precision, temporal scheduling remain future experiments, not changes silently applied here.
 ''')
-nb=dict(nbformat=4,nbformat_minor=5,metadata=dict(colab=dict(name='Attentify_Scaling_Benchmark.ipynb'),kernelspec=dict(name='python3',display_name='Python 3'),accelerator='GPU'),cells=cells)
+nb=dict(nbformat=4,nbformat_minor=5,metadata=dict(colab=dict(name='Attentify_Scaling_Benchmark.ipynb',private_outputs=True),kernelspec=dict(name='python3',display_name='Python 3'),accelerator='GPU'),cells=cells)
 (HERE/'Attentify_Scaling_Benchmark.ipynb').write_text(json.dumps(nb,indent=1),encoding='utf-8')
 print('Built',HERE/'Attentify_Scaling_Benchmark.ipynb')
