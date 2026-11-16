@@ -17,18 +17,19 @@ def load_assets(bundle, destination):
     return ensure_assets(bundle,destination)/'scb-refined.onnx'
 
 class Engine:
-    def __init__(self, assets, backend='cuda', confidence=.5, nms=.45,feature_mode='combined',action_model_id='scb-refined-onnx-v1',action_size=640,face_width=640):
+    def __init__(self, assets, backend='cuda', confidence=.5, nms=.45,feature_mode='combined',action_model_id='scb-refined-onnx-v1',action_size=640,face_width=640,enable_head=False,head_backend=None,head_batch_size=4):
         if not 0 < confidence < 1 or not 0 < nms < 1:
             raise ValueError('Confidence and NMS IoU must be between zero and one')
         if backend not in ('cuda', 'cpu'):
             raise ValueError('Choose cuda or cpu')
         if feature_mode not in ('faces','actions','combined'):raise ValueError('Choose faces, actions or combined')
+        if enable_head and feature_mode=='actions':raise ValueError('Head pose requires shared face detection; choose faces or combined')
         if not isinstance(action_size,int) or action_size<32 or action_size%32:raise ValueError('Action size must be a positive multiple of 32')
         if not isinstance(face_width,int) or face_width<32:raise ValueError('Face width must be an integer >=32')
         if action_model_id!='scb-refined-onnx-v1':raise ValueError('This model version has no portable adapter yet; see model-register.json')
         self.feature_mode=feature_mode
         self.action_size=action_size;self.face_width=face_width
-        self.session=None;self.face=None
+        self.session=None;self.face=None;self.head=None
         ort=None
         if feature_mode!='faces':
             import onnxruntime as ort
@@ -49,16 +50,21 @@ class Engine:
         if feature_mode!='actions':
             if digest(assets/'yunet.onnx')!=EXPECTED_FACE:raise ValueError('Unexpected face model checksum')
             self.face = cv2.FaceDetectorYN.create(str(assets/'yunet.onnx'), '', (640,480), .6, .3, 5000)
+        if enable_head:
+            from head_pose import HeadPose,FILENAME
+            self.head=HeadPose(assets/FILENAME,backend=head_backend or backend,batch_size=head_batch_size)
         self.confidence, self.nms = confidence, nms
         model_ids=(['yunet-fp32'] if feature_mode!='actions' else [])+([action_model_id] if feature_mode!='faces' else [])
-        self.config = dict(version='portable-pilot-2',feature_mode=feature_mode,model_ids=model_ids,
+        if self.head is not None:model_ids.append(self.head.config['model_id'])
+        self.config = dict(version='portable-pilot-3-head',feature_mode=feature_mode,model_ids=model_ids,
             model_sha256=EXPECTED_ACTION if self.session else None,yunet_sha256=EXPECTED_FACE if self.face else None,
             confidence=confidence, nms_iou=nms, action_long_edge=action_size, face_max_width=face_width,
             providers=self.session.get_providers() if self.session else ['CPU (YuNet)'], provider_note='CUDA can place unsupported operators on CPU; YuNet runs on CPU',
             python=platform.python_version(), ort=ort.__version__ if ort else None, opencv=cv2.__version__,
             attention_model=False, ownership='Unvalidated geometric candidates; temporary track IDs only')
+        self.config['head_pose']=self.head.config if self.head is not None else None
         torch = sys.modules.get('torch')
-        if torch is not None and feature_mode!='faces':
+        if torch is not None and (feature_mode!='faces' or enable_head):
             self.config['torch_version'] = torch.__version__
             self.config['torch_cuda_version'] = torch.version.cuda
             self.config['remote_gpu'] = torch.cuda.get_device_name(0) if torch.cuda.is_available() else None
@@ -93,10 +99,13 @@ class Engine:
         tick=time.perf_counter()
         for a in actions: a.update(associate(a['box'],faces), student_id=None)
         phases['association_ms']=(time.perf_counter()-tick)*1000
+        tick=time.perf_counter();heads=self.head.predict_faces(frame,faces,seconds) if self.head is not None else []
+        head_ms=(time.perf_counter()-tick)*1000 if self.head is not None else 0.
+        phases['head_pose_ms']=head_ms
         elapsed = (time.perf_counter()-start)*1000
-        return dict(source_seconds=seconds, faces=faces, actions=actions, attention=None,
+        return dict(source_seconds=seconds, faces=faces, actions=actions,head_poses=heads, attention=None,
                     input_shape=list(tensor.shape) if tensor is not None else None,face_input_shape=[fh,fw] if self.face is not None else None,
-                    phases_ms=phases,combined_ms=elapsed, yunet_tracking_ms=face_ms, actions_ms=elapsed-face_ms)
+                    phases_ms=phases,combined_ms=elapsed, yunet_tracking_ms=face_ms, actions_ms=elapsed-face_ms-head_ms,head_pose_ms=head_ms)
 
 def draw(frame, result):
     out = frame.copy()
@@ -107,6 +116,10 @@ def draw(frame, result):
         x,y,r,b = map(int,a['box']); color = COLORS[a['class_id']]
         cv2.rectangle(out,(x,y),(r,b),color,2)
         cv2.putText(out,f"{a['cue']}? {a['score']:.2f}",(x,max(20,y+18)),0,.55,color,2)
+    for head in result.get('head_poses',[]):
+        x,y,r,b=map(int,head['face_box'])
+        text=f"P {head['pitch']:+.0f} Y {head['yaw']:+.0f} R {head['roll']:+.0f}" if head['status']=='estimated' else 'Head unknown'
+        cv2.putText(out,text,(x,min(out.shape[0]-5,b+18)),0,.5,(90,255,255),1)
     return out
 
 class Run:
@@ -118,6 +131,7 @@ class Run:
         config['code_sha256'] = {n+'.py':digest(sys.modules[n].__file__) for n in ['colab_runtime','core','tracker','association','workspace_storage','review_package']}
         if mode=='browser_camera':config['code_sha256']['browser_camera.py']=digest(Path(__file__).with_name('browser_camera.py'))
         config['model_register_sha256']=digest(Path(__file__).with_name('model-register.json'))
+        if engine.config.get('head_pose'):config['code_sha256']['head_pose.py']=digest(Path(__file__).with_name('head_pose.py'))
         config['run_id']=self.path.name
         config['review_every_processed_frames']=review_every
         try:
@@ -128,6 +142,7 @@ class Run:
         (self.path/'config.json').write_text(json.dumps(config,indent=2))
     def add(self, result,frame=None):
         result.update(run_id=self.path.name,timestamp_basis='video_relative_seconds' if (self.path/'source.json').exists() else 'python_request_relative_seconds')
+        for head in result.get('head_poses',[]):head.update(source_frame_id=result.get('source_frame_id'),run_id=self.path.name,timestamp_basis=result['timestamp_basis'])
         self.rows.append(result)
         with (self.path/'observations.jsonl').open('a') as f: f.write(json.dumps(result)+'\n')
         if frame is not None:self.review.add(frame,result)
