@@ -30,7 +30,7 @@
     "package": "sixdrepnet==0.1.6",
     "checkpoint_sha256": null,
     "runtime_supported": false,
-    "status": "inspected handoff; checkpoint verification and independent adapter pending"
+    "status": "Superseded by verified head-6drepnet-v1; handoff uses this pretrained architecture"
   },
   "asset_pack": {
     "filename": "attentify-models-v1.zip",
@@ -47,5 +47,39 @@
         "sha256": "124db2279b76257a14628fe1ee87ead60a5d9a65fa54661657bc03fd64871c90"
       }
     ]
+  },
+  "head-6drepnet-v1": {
+    "filename": "head-sixdrepnet-v1.pth",
+    "sha256": "9bdcd0e072df0d21e92288b40ea1d1b3cf7173c44728ab9c45c4d673f361e018",
+    "runtime_supported": true,
+    "package": "sixdrepnet==0.1.6",
+    "architecture": "RepVGG-B1g2 deploy",
+    "source": "https://github.com/thohemp/6DRepNet",
+    "checkpoint_url": "https://cloud.ovgu.de/s/Q67RnLDy6JKLRWm/download/6DRepNet_300W_LP_AFLW2000.pth",
+    "parts": [
+      {
+        "name": "head-sixdrepnet-v1.pth.part00",
+        "bytes": 67108864,
+        "sha256": "160a00cfe1de8e3922615efbbf37835cba370c765185927892f4ea97428b25fb"
+      },
+      {
+        "name": "head-sixdrepnet-v1.pth.part01",
+        "bytes": 67108864,
+        "sha256": "52a7898ce67eaf6083d2cf0b4fb9438455b947223ef4b22a2353b4cfd4421f53"
+      },
+      {
+        "name": "head-sixdrepnet-v1.pth.part02",
+        "bytes": 23097463,
+        "sha256": "056804325db99bf12007828d8703bccfa7fc6526668a2e0d963b0a10f2b8a317"
+      }
+    ],
+    "outputs": [
+      "pitch",
+      "yaw",
+      "roll"
+    ],
+    "units": "degrees",
+    "confidence": null,
+    "status": "Execution/parity validation; classroom angular accuracy and mirrored direction categories require evaluation"
   }
 }
