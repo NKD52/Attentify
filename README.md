@@ -15,10 +15,15 @@ Final Year Project (FYP) repository for student attention detection research.
 
 The portable workspace runs the existing YuNet and experimental refined SCB
 YOLOv7 model independently or together. Its model register preserves the
-original action baseline and head-pose handoff as pending adapters. See
+original action baseline and a registered optional 6DRepNet head-pose adapter. See
 [`docs/EXPERIMENT-REGISTER.md`](docs/EXPERIMENT-REGISTER.md) for selected historical
-work and migration limitations. Hosted Colab GPU/camera acceptance testing remains
-required; local CPU checks do not establish classroom performance.
+work and migration limitations. Basic face/action Colab video and camera execution
+has been tested. Head pose is checked locally for execution and upstream parity;
+its hosted GPU performance and classroom angular accuracy still require evaluation.
+
+Enable `ENABLE_HEAD_POSE` in the notebook to show pitch/yaw/roll per shared face
+track, or disable it to compare the face/action baseline. The notebooks load
+`main` by default. See [head-pose integration](docs/HEADPOSE-INTEGRATION.md).
 
 Prototype 1 implements local video input, MediaPipe Face Landmarker, temporary
 geometric tracking IDs, face counts, processing FPS, and annotated MP4 output.
