@@ -2,9 +2,9 @@
 
 For component/resolution/output-cost experiments, use the separate [scaling benchmark](SCALING.md). It does not replace this tester or change its default model sizes.
 
-[Open the testing notebook in Colab](https://colab.research.google.com/github/NKD52/Attentify/blob/feature/portable-workspace/computer-vision/colab/Attentify_Colab_Testing.ipynb)
+[Open the testing notebook in Colab](https://colab.research.google.com/github/NKD52/Attentify/blob/main/computer-vision/colab/Attentify_Colab_Testing.ipynb)
 
-This source-only workspace runs YuNet faces, the fixed refined SCB YOLOv7 action model, or both. It does not estimate attention or identify students across classes. The head-pose handoff is recorded as pending; it is not silently loaded.
+This source-only workspace runs YuNet faces, the fixed refined SCB YOLOv7 action model, or both, with optional registered 6DRepNet head pose. It does not estimate attention or identify students across classes. Set `ENABLE_HEAD_POSE=True` for head angles on shared faces; use faces mode for an independent head test or combined mode for the full prototype. Disable the toggle to compare the prior baseline.
 
 ## Colab: start here
 
@@ -44,7 +44,7 @@ Image/video mode writes annotated media. `review_every=0` disables sampled revie
 
 - Code updates: develop on a separate branch; set `CODE_REF` to that branch/tag/commit and rerun setup plus engine initialization. Setup refuses to overwrite modified source checkouts. Results record the real checked-out commit and file hashes, not just a branch name.
 - Parameter updates: change the notebook settings or JSON config and rerun initialization/testing. These do not retrain the model.
-- Weight updates: register a new model ID/checksum and compatible adapter; preserve the previous weights/configuration. Only `scb-refined-onnx-v1` is currently executable as an action model. Original PyTorch and head entries are historical/pending, not menu choices pretending to work.
+- Weight updates: register a new model ID/checksum and compatible adapter; preserve the previous weights/configuration. The action adapter supports `scb-refined-onnx-v1`; head pose supports `head-6drepnet-v1`. The original PyTorch action entry remains historical, without a portable adapter.
 - Team features: keep standalone tests before combined tests. Connect outputs by source/frame/time/track with uncertainty; do not infer attentive/inattentive from one cue.
 - Model binaries and private datasets/results belong in private storage, not this public repository.
 
@@ -55,3 +55,11 @@ Tests: `python -m unittest discover -s tests -v`. Notebook generation: `python b
 Local validation covers asset reconstruction and checksum rejection, feature isolation, CPU inference, media outputs, diagnostic failures, review packaging and a copied source-tree trial. Hosted Colab GPU/dependency setup, browser camera permission/display and mobile compatibility still require a Colab trial. YuNet runs on CPU; CUDA may place unsupported action operators on CPU. Processing times exclude media decoding/encoding and browser transfer/display. Camera request-cycle timing includes transfer/inference but excludes returned-image display. These figures are not local classroom hardware requirements.
 
 Upstream: [SCB dataset/model source](https://huggingface.co/datasets/wintonYF/SCB-Dataset), [YuNet/OpenCV Zoo](https://github.com/opencv/opencv_zoo/tree/main/models/face_detection_yunet). Existing upstream terms remain applicable. This workspace does not grant a new license to refined model weights.
+
+## Head pose
+
+The merged notebook enables head pose with `ENABLE_HEAD_POSE=True`. Use `FEATURE_MODE='faces'` to test it independently, or `combined` for face/action/head. `HEAD_BATCH_SIZE` bounds valid crop batches. API/local CLI keep head disabled unless requested (`--head`). Head uses Torch CPU/CUDA explicitly, independently of ONNX Runtime; Intel/DirectML action acceleration does not accelerate this Torch module.
+
+Head checkpoint files are separate from the existing immutable action pack. Put the registered head file or all three registered parts in the model folder, or provide a ZIP containing them. `HEAD_MODEL_SOURCE` can point to separate head storage when `MODEL_SOURCE` is the legacy action-only ZIP. A legacy ZIP alone cannot supply head weights. Missing or wrong weights fail during setup; no model is silently downloaded at inference. Install `requirements-head.txt` in a compatible local Torch/torchvision environment. Colab already supplies Torch/torchvision and installs pinned sixdrepnet without replacing its scientific stack.
+
+Outputs include pitch/yaw/roll degrees, temporary track/frame/time, exact checkpoint and preprocessing versions, and separate head processing time. Face detector scores remain separate; head confidence is null. Tiny/invalid crops remain unknown. Direction/mirror calibration and classroom angular accuracy require evaluation. The Euler convention/preprocessing follows [6DRepNet](https://github.com/thohemp/6DRepNet); its [MIT notice](SIXDREPNET-LICENSE.txt) is retained.
