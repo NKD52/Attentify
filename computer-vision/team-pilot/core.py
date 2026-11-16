@@ -33,10 +33,12 @@ def assemble(folder,manifest,target):
     finally:temp.unlink(missing_ok=True)
     return target
 
-def prepare(frame):
-    h,w=frame.shape[:2];r=min(640/h,640/w)
+def prepare(frame,long_edge=640):
+    if not isinstance(long_edge,int) or long_edge<32 or long_edge%32:
+        raise ValueError('Action size must be a positive integer multiple of 32')
+    h,w=frame.shape[:2];r=min(long_edge/h,long_edge/w)
     nw,nh=round(w*r),round(h*r)
-    dw,dh=(640-nw)%32/2,(640-nh)%32/2
+    dw,dh=(long_edge-nw)%32/2,(long_edge-nh)%32/2
     image=cv2.resize(frame,(nw,nh)) if (w,h)!=(nw,nh) else frame
     image=cv2.copyMakeBorder(image,round(dh-.1),round(dh+.1),round(dw-.1),round(dw+.1),cv2.BORDER_CONSTANT,value=(114,114,114))
     th,tw=image.shape[:2];gain=min(th/h,tw/w)

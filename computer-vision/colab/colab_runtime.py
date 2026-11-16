@@ -17,14 +17,17 @@ def load_assets(bundle, destination):
     return ensure_assets(bundle,destination)/'scb-refined.onnx'
 
 class Engine:
-    def __init__(self, assets, backend='cuda', confidence=.5, nms=.45,feature_mode='combined',action_model_id='scb-refined-onnx-v1'):
+    def __init__(self, assets, backend='cuda', confidence=.5, nms=.45,feature_mode='combined',action_model_id='scb-refined-onnx-v1',action_size=640,face_width=640):
         if not 0 < confidence < 1 or not 0 < nms < 1:
             raise ValueError('Confidence and NMS IoU must be between zero and one')
         if backend not in ('cuda', 'cpu'):
             raise ValueError('Choose cuda or cpu')
         if feature_mode not in ('faces','actions','combined'):raise ValueError('Choose faces, actions or combined')
+        if not isinstance(action_size,int) or action_size<32 or action_size%32:raise ValueError('Action size must be a positive multiple of 32')
+        if not isinstance(face_width,int) or face_width<32:raise ValueError('Face width must be an integer >=32')
         if action_model_id!='scb-refined-onnx-v1':raise ValueError('This model version has no portable adapter yet; see model-register.json')
         self.feature_mode=feature_mode
+        self.action_size=action_size;self.face_width=face_width
         self.session=None;self.face=None
         ort=None
         if feature_mode!='faces':
@@ -50,7 +53,7 @@ class Engine:
         model_ids=(['yunet-fp32'] if feature_mode!='actions' else [])+([action_model_id] if feature_mode!='faces' else [])
         self.config = dict(version='portable-pilot-2',feature_mode=feature_mode,model_ids=model_ids,
             model_sha256=EXPECTED_ACTION if self.session else None,yunet_sha256=EXPECTED_FACE if self.face else None,
-            confidence=confidence, nms_iou=nms, action_long_edge=640, face_max_width=640,
+            confidence=confidence, nms_iou=nms, action_long_edge=action_size, face_max_width=face_width,
             providers=self.session.get_providers() if self.session else ['CPU (YuNet)'], provider_note='CUDA can place unsupported operators on CPU; YuNet runs on CPU',
             python=platform.python_version(), ort=ort.__version__ if ort else None, opencv=cv2.__version__,
             attention_model=False, ownership='Unvalidated geometric candidates; temporary track IDs only')
@@ -65,7 +68,7 @@ class Engine:
     def reset(self): self.tracker = FaceTracker(1.5,.6)
 
     def infer(self, frame, seconds):
-        start = time.perf_counter(); h,w = frame.shape[:2]; fw = min(w,640); fh = round(h*fw/w)
+        start = time.perf_counter(); h,w = frame.shape[:2]; fw = min(w,self.face_width); fh = max(1,round(h*fw/w))
         found=None
         if self.face is not None:
             self.face.setInputSize((fw,fh)); found = self.face.detect(cv2.resize(frame,(fw,fh)))[1]
@@ -77,15 +80,23 @@ class Engine:
         for f,t in zip(faces,self.tracker.update([tuple(f['box']) for f in faces],seconds)):
             f.update(track_id=t.track_id, student_id=None)
         face_ms = (time.perf_counter()-start)*1000
-        actions=[];tensor=None
+        actions=[];tensor=None;phases={'yunet_tracking_ms':face_ms,'action_preprocess_ms':0.,'action_runtime_ms':0.,'action_postprocess_ms':0.,'association_ms':0.}
         if self.session is not None:
-            tensor, meta = prepare(frame)
+            tick=time.perf_counter();tensor, meta = prepare(frame,self.action_size)
+            phases['action_preprocess_ms']=(time.perf_counter()-tick)*1000
+            tick=time.perf_counter()
             raw = self.session.run(None, {self.session.get_inputs()[0].name:tensor})[0]
+            phases['action_runtime_ms']=(time.perf_counter()-tick)*1000
+            tick=time.perf_counter()
             actions = decode(raw,meta,self.confidence,self.nms)
+            phases['action_postprocess_ms']=(time.perf_counter()-tick)*1000
+        tick=time.perf_counter()
         for a in actions: a.update(associate(a['box'],faces), student_id=None)
+        phases['association_ms']=(time.perf_counter()-tick)*1000
         elapsed = (time.perf_counter()-start)*1000
         return dict(source_seconds=seconds, faces=faces, actions=actions, attention=None,
-                    input_shape=list(tensor.shape) if tensor is not None else None, combined_ms=elapsed, yunet_tracking_ms=face_ms, actions_ms=elapsed-face_ms)
+                    input_shape=list(tensor.shape) if tensor is not None else None,face_input_shape=[fh,fw] if self.face is not None else None,
+                    phases_ms=phases,combined_ms=elapsed, yunet_tracking_ms=face_ms, actions_ms=elapsed-face_ms)
 
 def draw(frame, result):
     out = frame.copy()

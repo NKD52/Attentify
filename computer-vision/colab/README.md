@@ -1,5 +1,7 @@
 # Portable Attentify workspace
 
+For component/resolution/output-cost experiments, use the separate [scaling benchmark](SCALING.md). It does not replace this tester or change its default model sizes.
+
 [Open the testing notebook in Colab](https://colab.research.google.com/github/NKD52/Attentify/blob/feature/portable-workspace/computer-vision/colab/Attentify_Colab_Testing.ipynb)
 
 This source-only workspace runs YuNet faces, the fixed refined SCB YOLOv7 action model, or both. It does not estimate attention or identify students across classes. The head-pose handoff is recorded as pending; it is not silently loaded.
