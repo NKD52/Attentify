@@ -36,3 +36,4 @@ models/
 *.pt
 *.pth
 *.zip
+*.part[0-9]*
